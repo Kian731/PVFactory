@@ -96,3 +96,18 @@ footer{display:flex;gap:12px;align-items:center;padding:8px 16px;background:var(
 #ratioList .sw{width:10px;height:10px;border-radius:50%;display:inline-block}
 #tokens{display:flex;gap:4px;flex-wrap:wrap;margin:4px 0}
 #tokens button{padding:1px 6px;font-size:12px;font-family:monospace}
+
+.card[data-collapse]>header{cursor:pointer;gap:8px;user-select:none}
+.card>header h3{flex:1}
+.chev{color:var(--muted);transition:transform .15s}
+.card.collapsed .chev{transform:rotate(-90deg)}
+.card.collapsed .body{display:none}
+.notice{font-size:12px;color:var(--muted);background:rgba(127,127,127,.1);border-radius:8px;padding:8px 10px;margin:8px 0;line-height:1.6}
+.notice.bad{color:var(--danger);background:rgba(217,58,58,.1)}
+.subtitle{font-size:12px;font-weight:600;color:var(--accent);margin:12px 0 0;padding-top:8px;border-top:1px dashed var(--line)}
+
+#modeTabs{margin-left:auto;display:flex;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+#modeTabs button{border:none;background:transparent;padding:5px 16px;border-radius:7px;font-weight:600;color:var(--muted)}
+#modeTabs button.on{background:var(--accent);color:#fff}
+header{align-items:center}
+

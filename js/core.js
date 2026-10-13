@@ -17,7 +17,7 @@ const DEFAULTS = {
   cropOn: true, specs: ['1:1'], custom: { w: 16, h: 9 }, pos: {},
   wm: { on: false, id: null, anchor: 8, custom: false, margin: 3, x: 0.9, y: 0.9, size: 20, opacity: 80, rot: 0 },
   resize: { on: false, mode: 'long', long: 1920, width: 1080, height: 1080, percent: 50, exactW: 1080, exactH: 1350, noUp: true },
-  out: { on: true, fmt: 'orig', quality: 85, targetKB: 0, bg: '#ffffff', path: '', tpl: '{name}_{ratio}', seqStart: 1, seqPad: 3, conflict: 'rename' },
+  out: { on: true, fmt: 'orig', von: true, vfmt: 'mp4', vquality: 70, vtargetKB: 0, fps: 0, quality: 85, targetKB: 0, bg: '#ffffff', tpl: '{name}_{ratio}', seqStart: 1, seqPad: 3, conflict: 'rename' },
 };
 
 // 移除舊版殘留、不在預設結構內的欄位（pos 例外）
@@ -30,12 +30,16 @@ function prune(base, obj) {
 }
 
 // 實際生效的設定（區塊未啟用時使用中性值）
-function effective(S) {
+function effective(S, mode = 'image') {
+  const o = S.out;
+  let out;
+  if (mode === 'video') out = o.von ? { ...o, on: true, quality: o.vquality, targetKB: o.vtargetKB } : { ...o, on: false, targetKB: 0 };
+  else out = o.on ? o : { ...o, fmt: 'orig', quality: 92, targetKB: 0 };
   return {
     ...S,
     specs: S.cropOn ? S.specs : ['orig'],
     resize: S.resize.on ? S.resize : { ...S.resize, mode: 'none' },
-    out: S.out.on ? S.out : { ...S.out, fmt: 'orig', quality: 92, targetKB: 0 },
+    out,
   };
 }
 
@@ -118,10 +122,11 @@ function mimeFor(S, file) {
   if (f === 'jpg') return 'image/jpeg';
   if (f === 'png') return 'image/png';
   if (f === 'webp') return 'image/webp';
+  if (f === 'gif') return 'image/gif';
   const t = file && file.type;
-  return t === 'image/jpeg' || t === 'image/webp' ? t : 'image/png';
+  return t === 'image/jpeg' || t === 'image/webp' || t === 'image/gif' ? t : 'image/png';
 }
-const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
 
 function renderOutput(bmp, pos, S, spec, wmImg, mime) {
   const c = cropRect(bmp.width, bmp.height, spec.ratio, pos.x, pos.y, pos.z);
@@ -142,6 +147,7 @@ const toBlob = (cv, mime, q) => new Promise(res => cv.toBlob(res, mime, q));
 async function encodeCanvas(cv, mime, S) {
   const q = S.out.quality / 100;
   const target = (+S.out.targetKB || 0) * 1024;
+  if (mime === 'image/gif') return { blob: await Media.encodeGif(cv), over: false };
   if (mime === 'image/png' || !target) return { blob: await toBlob(cv, mime, q), over: false };
   const first = await toBlob(cv, mime, q);
   if (first.size <= target) return { blob: first, over: false };

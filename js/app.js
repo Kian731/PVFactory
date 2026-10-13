@@ -8,18 +8,21 @@
   let S = loadSettings();
   let items = [];            // {id, file, name, w, h, thumb, pos:{key:{x,y}}|null}
   let cur = -1, bmp = null, selToken = 0;
+  let mode = 'image';        // 'image' | 'video'：兩種模式各有自己的檔案清單
+  const modeState = { image: { items: [], cur: -1 }, video: { items: [], cur: -1 } };
   let wmList = [];           // {id, name, blob}
   const wmImgs = {};         // id -> ImageBitmap
   const hiddenKeys = new Set(); // 預覽中隱藏的裁切框
-  let dirHandle = null, helper = false;
+  let dirHandle = null;
   let running = false, cancelled = false;
+  const vHolder = { conv: null };
   let G = { s: 1, ox: 0, oy: 0 };
 
   function loadSettings() {
     try { return prune(DEFAULTS, deepMerge(DEFAULTS, JSON.parse(localStorage.getItem(LS_SET)))); } catch { return deepMerge(DEFAULTS, {}); }
   }
   const save = () => { try { localStorage.setItem(LS_SET, JSON.stringify(S)); } catch { } };
-  const E = () => effective(S);
+  const E = () => effective(S, mode);
   const getPath = (o, p) => p.split('.').reduce((a, k) => a[k], o);
   const setPath = (o, p, v) => { const ks = p.split('.'); const l = ks.pop(); ks.reduce((a, k) => a[k], o)[l] = v; };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -125,22 +128,44 @@
   }
 
   // ---------- 檔案加入 ----------
-  const IMG_RE = /\.(jpe?g|png|webp|gif|bmp|avif)$/i;
+  const IMG_RE = /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif)$/i;
+  const fmtDur = s => { s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
   async function addFiles(files) {
+    let wrong = 0;
     for (const f of files) {
-      if (!f || !(f.type.startsWith('image/') || IMG_RE.test(f.name))) continue;
-      try {
-        const b = await createImageBitmap(f);
-        const sc = 96 / Math.max(b.width, b.height);
-        const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.round(b.width * sc)); c.height = Math.max(1, Math.round(b.height * sc));
-        c.getContext('2d').drawImage(b, 0, 0, c.width, c.height);
-        items.push({ id: uid(), file: f, name: f.name, w: b.width, h: b.height, thumb: c.toDataURL('image/jpeg', 0.7), pos: null });
-        b.close();
-      } catch { logMsg(`無法讀取：${f.name}`, true); }
+      if (!f) continue;
+      const vid = Media.isVideo(f), img = !vid && (f.type.startsWith('image/') || IMG_RE.test(f.name));
+      if (!vid && !img) continue;
+      if (mode === 'image' && vid || mode === 'video' && img) { wrong++; continue; }
+      if (vid) await addVideo(f); else await addImage(f);
       if (items.length && cur < 0) await select(0);
     }
+    if (wrong) logMsg(`已略過 ${wrong} 個${mode === 'image' ? '影片' : '圖片'}檔案：目前是「${mode === 'image' ? '圖片' : '影片'}」模式，請從右上角切換到「${mode === 'image' ? '影片' : '圖片'}」模式再加入。`, true);
     updateList();
+  }
+  async function addImage(f) {
+    try {
+      let file = f, b;
+      try { b = await createImageBitmap(f); }
+      catch (err) {
+        if (!Media.isHeic(f)) throw err;
+        $('#count').textContent = `轉換 HEIC：${f.name} …`;
+        file = await Media.heicToJpeg(f); b = await createImageBitmap(file);
+      }
+      const sc = 96 / Math.max(b.width, b.height);
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(b.width * sc)); c.height = Math.max(1, Math.round(b.height * sc));
+      c.getContext('2d').drawImage(b, 0, 0, c.width, c.height);
+      items.push({ id: uid(), kind: 'image', file, name: f.name, w: b.width, h: b.height, thumb: c.toDataURL('image/jpeg', 0.7), pos: null });
+      b.close();
+    } catch { logMsg(`無法讀取：${f.name}${Media.isHeic(f) ? '（HEIC 轉換失敗）' : ''}`, true); }
+  }
+  async function addVideo(f) {
+    $('#count').textContent = `讀取影片：${f.name} …`;
+    try {
+      const v = await Media.probeVideo(f);
+      items.push({ id: uid(), kind: 'video', file: f, name: f.name, w: v.w, h: v.h, thumb: v.thumb, pos: null, dur: v.dur, t0: v.t0, rate: v.rate, hasAudio: v.hasAudio, audioBps: v.audioBps, tPrev: 0 });
+    } catch (err) { const m = String(err.message || err); logMsg(`無法加入影片 ${f.name}：${/unsupported or unrecognizable|Invalid|corrupt/i.test(m) ? '檔案格式無法辨識或已損毀' : m}`, true); }
   }
 
   // 同步取出 dataTransfer 內容（await 之後 Chrome 會清空），有資料夾才遞迴
@@ -166,20 +191,36 @@
 
   function updateList() {
     const n = E().specs.length;
-    $('#count').textContent = items.length ? `共 ${items.length} 張 × ${n} 種規格 = ${items.length * n} 個輸出` : '尚未加入圖片';
+    $('#count').textContent = items.length ? `共 ${items.length} 個檔案 × ${n} 種規格 = ${items.length * n} 個輸出` : '尚未加入檔案';
     $('#list').innerHTML = items.map((it, i) =>
-      `<div class="item ${i === cur ? 'sel' : ''}" data-i="${i}"><img src="${it.thumb}"><div class="meta"><div class="nm" title="${it.name}">${it.name}</div><small>${it.w}×${it.h}${it.pos ? ' · 已手動調整' : ''}</small></div><button class="x" data-x="${i}" title="移除">✕</button></div>`).join('');
+      `<div class="item ${i === cur ? 'sel' : ''}" data-i="${i}"><img src="${it.thumb}"><div class="meta"><div class="nm" title="${it.name}">${it.kind === 'video' ? '🎞 ' : ''}${it.name}</div><small>${it.w}×${it.h}${it.kind === 'video' ? ' · ' + fmtDur(it.dur) : ''}${it.pos ? ' · 已手動調整' : ''}</small></div><button class="x" data-x="${i}" title="移除">✕</button></div>`).join('');
     $('#empty').hidden = items.length > 0;
   }
 
   async function select(i) {
-    if (i < 0 || i >= items.length) { cur = -1; selToken++; bmp && bmp.close(); bmp = null; draw(); updateList(); return; }
+    if (i < 0 || i >= items.length) { cur = -1; selToken++; Media.closePreview(); bmp && bmp.close(); bmp = null; $('#seekWrap').hidden = true; draw(); updateList(); return; }
     cur = i;
-    const tk = ++selToken;
-    const b = await createImageBitmap(items[i].file);
-    if (tk !== selToken) { b.close(); return; }
+    const tk = ++selToken, it = items[i];
+    let b = null;
+    if (it.kind === 'video') {
+      try { await Media.openPreview(it); b = await Media.frameBitmap(it, it.tPrev || 0); } catch (err) { logMsg(`無法預覽影片：${err.message || err}`, true); }
+    } else { Media.closePreview(); b = await createImageBitmap(it.file); }
+    if (tk !== selToken) { b && b.close(); return; }
     bmp && bmp.close(); bmp = b;
+    $('#seekWrap').hidden = it.kind !== 'video';
+    if (it.kind === 'video') { $('#seek').value = Math.round((it.tPrev || 0) * 1000); updateSeekText(); }
     updateList(); syncDependent(); draw(); scheduleEstimate();
+  }
+  let seekTimer = 0;
+  function updateSeekText() { const it = curItem(); if (it && it.kind === 'video') $('#seekT').textContent = `${fmtDur((it.tPrev || 0) * it.dur)} / ${fmtDur(it.dur)}`; }
+  function onSeek() {
+    const it = curItem(); if (!it || it.kind !== 'video') return;
+    it.tPrev = $('#seek').value / 1000; updateSeekText();
+    clearTimeout(seekTimer);
+    seekTimer = setTimeout(async () => {
+      const tk = ++selToken;
+      try { const b = await Media.frameBitmap(it, it.tPrev); if (tk !== selToken || !b) { b && b.close(); return; } bmp && bmp.close(); bmp = b; draw(); } catch { }
+    }, 80);
   }
 
   // ---------- 預覽繪製 ----------
@@ -242,6 +283,11 @@
     estTimer = setTimeout(async () => {
       if (!bmp) { $('#estimate').textContent = ''; return; }
       const tk = ++estTok, it = curItem(), e = E(), res = [];
+      if (it.kind === 'video') {
+        const parts = frames().map(f => { const p = Media.videoPlan(it, f.spec, e, posOf(it, f.key)), by = Media.estimateBytes(it, p); return `${f.spec.suffix} ${p.W}×${p.H}${by ? ' 約 ' + fmtSize(by) : ''}`; });
+        $('#estimate').textContent = parts.length ? `此影片預估（${String(e.out.vfmt || 'mp4').toUpperCase()}，${fmtDur(it.dur)}）：${parts.join('　｜　')}` : '';
+        return;
+      }
       try {
         for (const f of frames()) {
           const mime = mimeFor(e, it.file);
@@ -362,9 +408,9 @@
   const padN = (n, p) => String(n).padStart(p, '0');
   function updateNameExample() {
     const it = curItem() || { name: 'photo.jpg' }, e = E(), key = e.specs[0] || 'orig', spec = specFor(key, S);
-    const mime = mimeFor(e, it.file);
+    const ext = mode === 'video' ? (['mov', 'webm', 'avi'].includes(S.out.vfmt) ? S.out.vfmt : 'mp4') : EXT[mimeFor(e, it.file)];
     const nm = makeBase(S.out.tpl, { name: it.name.replace(/\.[^.]+$/, ''), ratio: spec.suffix, w: 1080, h: 1350, n: padN(S.out.seqStart, S.out.seqPad), i: padN(1, S.out.seqPad) });
-    $('#nameEx').textContent = `範例：${nm}.${EXT[mime]}`;
+    $('#nameEx').textContent = `範例：${nm}.${ext}`;
   }
 
   // ---------- 輸出 ----------
@@ -372,22 +418,7 @@
     const l = $('#log'); l.hidden = false;
     const d = document.createElement('div'); if (err) d.className = 'err'; d.textContent = t; l.appendChild(d); l.scrollTop = l.scrollHeight;
   }
-  const API = (p, opt = {}) => fetch(p, { method: 'POST', ...opt, headers: { 'X-Imgtool': '1', ...(opt.headers || {}) } }).then(r => r.json());
-  async function detectHelper() {
-    if (!location.protocol.startsWith('http')) return false;
-    try { const r = await fetch('/api/ping', { headers: { 'X-Imgtool': '1' } }); return (await r.json()).ok === true; } catch { return false; }
-  }
-  function updateOutputUI() {
-    const path = $('#outPath');
-    path.disabled = !helper; $('#btnBrowse').hidden = !helper;
-    path.placeholder = helper ? '貼上資料夾路徑，如 D:\\輸出' : '需用「啟動.bat」開啟才能貼路徑';
-    $('#helperNote').textContent = helper
-      ? '已連線本機輔助程式：可貼上任意路徑（資料夾不存在會自動建立）。路徑留空則用下方方式/下載。'
-      : '目前是純網頁模式（雙擊 index.html）：瀏覽器不允許網頁直接寫入任意路徑。想貼路徑與開啟資料夾，請改用「啟動.bat」開啟；或用下方「用瀏覽器選資料夾」，再不然完成後會自動下載。';
-    $('#dirRow').hidden = helper && !!S.out.path.trim();
-    $('#btnOpenDir').disabled = !(helper && S.out.path.trim());
-    $('#btnOpenDir').title = $('#btnOpenDir').disabled ? '需用「啟動.bat」開啟並設定輸出路徑' : '';
-  }
+  function updateOutputUI() { }
   function showDir() {
     $('#dirName').textContent = dirHandle ? `已選資料夾：${dirHandle.name}` : (window.showDirectoryPicker ? '未選擇資料夾：完成後自動下載（多張打包 ZIP）' : '此瀏覽器：完成後自動下載（多張打包 ZIP）');
   }
@@ -414,10 +445,8 @@
     if (!items.length) { alert('請先加入圖片'); return; }
     if (!e.specs.length) { alert('請至少勾選一種裁切規格，或關閉「比例裁切」'); return; }
     if (S.wm.on && !curWmImg()) { alert('已啟用浮水印，但尚未選擇浮水印圖片'); return; }
-    const outPath = S.out.path.trim();
-    const useHelper = helper && !!outPath;
     let dh = null;
-    if (!useHelper && dirHandle) {
+    if (dirHandle) {
       try {
         let p = await dirHandle.queryPermission({ mode: 'readwrite' });
         if (p !== 'granted') p = await dirHandle.requestPermission({ mode: 'readwrite' });
@@ -431,28 +460,34 @@
     let done = 0, fail = 0, skipped = 0, over = 0, saved = 0, seq = S.out.seqStart, fatal = false;
     for (let ii = 0; ii < items.length && !cancelled && !fatal; ii++) {
       const it = items[ii];
-      let b;
+      let b = null;
       try {
-        b = await createImageBitmap(it.file);
+        if (it.kind !== 'video') b = await createImageBitmap(it.file);
         for (const key of e.specs) {
           if (cancelled) break;
-          const spec = specFor(key, S), mime = mimeFor(e, it.file);
-          const out = renderOutput(b, posOf(it, key), e, spec, wmImg, mime);
-          const r = await encodeCanvas(out, mime, e);
-          if (r.over) over++;
-          const base = makeBase(S.out.tpl, { name: it.name.replace(/\.[^.]+$/, ''), ratio: spec.suffix, w: out.width, h: out.height, n: padN(seq++, S.out.seqPad), i: padN(ii + 1, S.out.seqPad) });
-          const ext = EXT[mime];
-          if (useHelper) {
-            const want = `${base}.${ext}`, inRun = used.has(want.toLowerCase());
-            const q = new URLSearchParams({ dir: outPath, name: want, conflict: inRun ? 'rename' : S.out.conflict });
-            const j = await API('/api/write?' + q, { body: r.blob });
-            if (j.error) { logMsg(j.error, true); fatal = true; break; }
-            if (j.skipped) skipped++; else { used.add(j.name.toLowerCase()); saved++; }
+          const spec = specFor(key, S);
+          let blob, ext, ow, oh;
+          if (it.kind === 'video') {
+            const v = await Media.processVideo(it, spec, e, S.wm, wmImg, posOf(it, key), p => {
+              $('#bar').style.width = ((done + p) / total * 100) + '%';
+              $('#progressText').textContent = `${done + 1} / ${total}（影片 ${Math.round(p * 100)}%）`;
+            }, vHolder);
+            blob = v.blob; ext = v.ext; ow = v.w; oh = v.h;
+            if (v.over) over++;
+            if (v.warn) logMsg(`${it.name}：${v.warn}`);
           } else {
+            const mime = mimeFor(e, it.file);
+            const out = renderOutput(b, posOf(it, key), e, spec, wmImg, mime);
+            const r = await encodeCanvas(out, mime, e);
+            if (r.over) over++;
+            blob = r.blob; ext = EXT[mime]; ow = out.width; oh = out.height;
+          }
+          const base = makeBase(S.out.tpl, { name: it.name.replace(/\.[^.]+$/, ''), ratio: spec.suffix, w: ow, h: oh, n: padN(seq++, S.out.seqPad), i: padN(ii + 1, S.out.seqPad) });
+          {
             const name = await uniqueName(base, ext, dh, used);
             if (name === null) skipped++;
-            else if (dh) { const fh = await dh.getFileHandle(name, { create: true }); const w = await fh.createWritable(); await w.write(r.blob); await w.close(); saved++; }
-            else { collected.push({ name, blob: r.blob }); saved++; }
+            else if (dh) { const fh = await dh.getFileHandle(name, { create: true }); const w = await fh.createWritable(); await w.write(blob); await w.close(); saved++; }
+            else { collected.push({ name, blob: blob }); saved++; }
           }
           done++;
           $('#bar').style.width = (done / total * 100) + '%';
@@ -460,17 +495,17 @@
           await new Promise(r => setTimeout(r, 0));
         }
       } catch (err) {
-        fail++; logMsg(`失敗：${it.name}（${err.message || err}）`, true);
+        if (!cancelled) { fail++; logMsg(`失敗：${it.name}（${err.message || err}）`, true); }
       } finally { b && b.close(); }
     }
-    if (!useHelper && !dh && collected.length) {
+    if (!dh && collected.length) {
       if (collected.length === 1) download(collected[0].blob, collected[0].name);
       else {
         const d = new Date();
         download(await Zip.build(collected), `圖片輸出_${d.getFullYear()}${z2(d.getMonth() + 1)}${z2(d.getDate())}-${z2(d.getHours())}${z2(d.getMinutes())}.zip`);
       }
     }
-    const where = useHelper ? `（已存到 ${outPath}）` : dh ? `（已存入資料夾：${dh.name}）` : '（已下載）';
+    const where = dh ? `（已存入資料夾：${dh.name}）` : '（已下載）';
     logMsg(`${fatal ? '已中止' : cancelled ? '已取消' : '完成'}：輸出 ${saved} 個${skipped ? `，略過 ${skipped}` : ''}${fail ? `，失敗 ${fail} 張` : ''}${over ? `，${over} 個仍超過大小上限` : ''}${where}`, fail > 0 || fatal);
     running = false; $('#btnStart').disabled = false; $('#btnCancel').hidden = true;
     setTimeout(() => { $('#progressWrap').hidden = true; $('#bar').style.width = '0'; $('#progressText').textContent = ''; }, 2500);
@@ -524,7 +559,7 @@
       const it = e.target.closest('.item'); if (it) select(+it.dataset.i);
     });
     $('#btnSort').addEventListener('click', () => { const c = items[cur]; items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })); cur = items.indexOf(c); updateList(); });
-    $('#btnClear').addEventListener('click', async () => { if (items.length && confirm('清空圖片清單？')) { items = []; await select(-1); } });
+    $('#btnClear').addEventListener('click', async () => { if (items.length && confirm(mode === 'video' ? '清空影片清單？' : '清空圖片清單？')) { items = []; await select(-1); } });
     $('#btnPrev').addEventListener('click', () => select(cur - 1));
     $('#btnNext').addEventListener('click', () => select(cur + 1));
     $('#chips').addEventListener('click', e => {
@@ -568,16 +603,9 @@
       try { dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' }); await DB.kvPut('outDir', dirHandle); showDir(); } catch { }
     });
     $('#btnDirClear').addEventListener('click', async () => { dirHandle = null; await DB.kvDel('outDir'); showDir(); });
-    $('#btnBrowse').addEventListener('click', async () => {
-      const b = $('#btnBrowse'); b.disabled = true; b.textContent = '請在彈出視窗選擇…';
-      try { const j = await API('/api/pick'); if (j.path) { S.out.path = j.path; syncUI(); changed(); } else if (j.error) alert(j.error); } catch { alert('無法開啟選擇視窗，請直接貼上路徑'); }
-      b.disabled = false; b.textContent = '瀏覽…';
-    });
-    $('#btnOpenDir').addEventListener('click', async () => {
-      try { const j = await API('/api/open?' + new URLSearchParams({ dir: S.out.path.trim() })); if (j.error) alert(j.error); } catch { alert('無法開啟資料夾'); }
-    });
     $('#btnStart').addEventListener('click', run);
-    $('#btnCancel').addEventListener('click', () => { cancelled = true; });
+    $('#btnCancel').addEventListener('click', () => { cancelled = true; if (vHolder.conv) vHolder.conv.cancel().catch(() => { }); });
+    $('#seek').addEventListener('input', onSeek);
 
     $('#btnPresetSave').addEventListener('click', () => {
       const n = $('#presetName').value.trim(); if (!n) { alert('請輸入預設名稱'); return; }
@@ -613,6 +641,50 @@
     });
   }
 
+  // ---------- 區塊收納 ----------
+  function initCollapse() {
+    let st = []; try { st = JSON.parse(localStorage.getItem('imgtool.collapsed')) || []; } catch { }
+    $$('.card[data-collapse]').forEach(card => {
+      const id = card.dataset.collapse;
+      card.classList.toggle('collapsed', st.includes(id));
+      card.querySelector('header').addEventListener('click', e => {
+        if (e.target.closest('button,input,select')) return;
+        card.classList.toggle('collapsed');
+        const now = $$('.card.collapsed[data-collapse]').map(c => c.dataset.collapse);
+        try { localStorage.setItem('imgtool.collapsed', JSON.stringify(now)); } catch { }
+      });
+    });
+  }
+
+  // ---------- 圖片 / 影片模式 ----------
+  async function setMode(m, first) {
+    if (!first) {
+      if (m === mode) return;
+      if (running) { alert('處理中，請等完成後再切換模式'); return; }
+      modeState[mode].items = items; modeState[mode].cur = cur;
+    }
+    mode = m;
+    try { localStorage.setItem('imgtool.mode', m); } catch { }
+    items = modeState[m].items;
+    const want = modeState[m].cur;
+    cur = -1;
+    $$('#modeTabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === m));
+    $$('[data-only]').forEach(el => el.hidden = el.dataset.only !== m);
+    $('#fileInput').accept = m === 'video' ? 'video/*,.mkv,.mov' : 'image/*,.heic,.heif';
+    $('#dropTitle').textContent = m === 'video' ? '拖曳影片或資料夾到這裡' : '拖曳圖片或資料夾到這裡';
+    $('#btnAddFiles').textContent = m === 'video' ? '加入影片' : '加入圖片';
+    $('#log').innerHTML = ''; $('#log').hidden = true;
+    hiddenKeys.clear();
+    syncDependent();
+    if (items.length) await select(Math.min(Math.max(want, 0), items.length - 1)); else await select(-1);
+    updateList();
+  }
+  function initMode() {
+    let m = 'image'; try { m = localStorage.getItem('imgtool.mode') === 'video' ? 'video' : 'image'; } catch { }
+    $('#modeTabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) setMode(b.dataset.tab); });
+    return setMode(m, true);
+  }
+
   // ---------- 介面主題 ----------
   function setTheme(t) {
     try { localStorage.setItem('imgtool.theme', t); } catch { }
@@ -627,11 +699,11 @@
 
   // ---------- 初始化 ----------
   (async function init() {
-    initTheme();
+    initTheme(); initCollapse();
+    if (!Media.videoSupported()) { const n = $('#vidNote'); n.classList.add('bad'); n.innerHTML += '<br>⚠ 目前的瀏覽器不支援影片處理，只能處理圖片。請改用 Chrome 或 Edge 電腦版。'; }
     buildGrid(); bindSettings(); wire();
-    helper = await detectHelper();
     await loadWmLib();
     try { dirHandle = await DB.kvGet('outDir'); } catch { }
-    showDir(); renderPresets(); syncUI(); updateList(); draw();
+    showDir(); renderPresets(); syncUI(); await initMode(); updateList(); draw();
   })();
 })();

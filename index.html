@@ -3,22 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>圖片處理工具</title>
+<title>圖影工坊｜圖片＋影片批次處理</title>
 <script>try{var t=localStorage.getItem('imgtool.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 <header>
-  <h1>圖片處理工具</h1>
-  <span class="sub">裁切 · 浮水印 · 縮放壓縮 · 轉格式（圖片只在本機處理，不會上傳）</span>
+  <h1>圖影工坊</h1>
+  <span class="sub">裁切 · 浮水印 · 縮放壓縮 · 轉格式（檔案只在你的電腦處理，不會上傳）</span>
+  <nav id="modeTabs"><button data-tab="image">🖼 圖片</button><button data-tab="video">🎞 影片</button></nav>
 </header>
 
 <main>
   <!-- 左：檔案清單 -->
   <aside id="left">
     <div id="dropzone">
-      <b>拖曳圖片或資料夾到這裡</b>
-      <small>或點擊選擇圖片</small>
+      <b id="dropTitle">拖曳圖片或資料夾到這裡</b>
+      <small>或點擊選擇檔案</small>
+    </div>
+    <div class="notice" data-only="image">
+      支援：JPG / PNG / WebP / GIF / BMP / HEIC（iPhone 照片會自動轉換）
+    </div>
+    <div id="vidNote" class="notice" data-only="video">
+      支援：MP4 / MOV / WebM / MKV（含 H.265/HEVC）。<br>
+      ⚠ 影片功能需使用 <b>Chrome 或 Edge 電腦版</b>；HEVC 能否讀取取決於你的電腦與瀏覽器的解碼支援。
     </div>
     <div class="row">
       <button id="btnAddFiles">加入圖片</button>
@@ -30,7 +38,7 @@
     </div>
     <div id="count" class="muted">尚未加入圖片</div>
     <div id="list"></div>
-    <input type="file" id="fileInput" accept="image/*" multiple hidden>
+    <input type="file" id="fileInput" accept="image/*,video/*,.heic,.heif,.mkv,.mov" multiple hidden>
     <input type="file" id="dirInput" webkitdirectory multiple hidden>
     <div id="themeBar">介面
       <button class="ghost" data-theme="auto">自動</button>
@@ -50,14 +58,17 @@
       <button id="btnCenter" class="ghost">此張置中</button>
       <button id="btnApplyAll" class="ghost" title="把這張目前的裁切位置設為預設，套用到所有圖片">位置套用全部</button>
     </div>
+    <div id="seekWrap" class="toolbar" hidden>
+      <span class="muted">預覽時間：</span><input type="range" id="seek" min="0" max="1000" value="0" style="flex:1"><span id="seekT" class="muted"></span>
+    </div>
     <div id="stage"><canvas id="cv"></canvas><div id="empty">請先加入圖片</div></div>
     <div id="info" class="muted"></div>
   </section>
 
   <!-- 右：設定 -->
   <aside id="right">
-    <section class="card">
-      <header><h3>預設設定</h3><span id="presetBadge" class="badge" hidden></span></header>
+    <section class="card" data-collapse="preset">
+      <header><h3>預設設定</h3><span id="presetBadge" class="badge" hidden></span><span class="chev">▾</span></header>
       <div class="body">
         <div class="row"><input type="text" id="presetName" placeholder="預設名稱" style="flex:1"><button id="btnPresetSave">儲存</button></div>
         <div class="row"><select id="presetSel" style="flex:1"></select><button id="btnPresetLoad">載入</button><button id="btnPresetDel" class="ghost danger">刪除</button></div>
@@ -117,8 +128,8 @@
       </div>
     </section>
 
-    <section class="card" data-toggle="out.on">
-      <header><h3>壓縮與格式</h3><label class="switch"><input type="checkbox" data-k="out.on"><i></i></label></header>
+    <section class="card" data-only="image" data-toggle="out.on">
+      <header><h3>圖片壓縮與格式</h3><label class="switch"><input type="checkbox" data-k="out.on"><i></i></label></header>
       <div class="body">
         <div class="field">格式
           <select data-k="out.fmt">
@@ -126,23 +137,45 @@
             <option value="jpg">JPG</option>
             <option value="png">PNG</option>
             <option value="webp">WebP</option>
+            <option value="gif">GIF（256 色，單張）</option>
           </select>
         </div>
         <div class="field">品質 <input type="range" data-k="out.quality" min="1" max="100"><span data-o="out.quality"></span></div>
         <div class="field">檔案大小上限 <input type="number" data-k="out.targetKB" min="0" style="width:90px"> KB <small class="muted">0＝不限；超過會自動降低品質</small></div>
         <div class="field">透明轉 JPG 的底色 <input type="color" data-k="out.bg"></div>
-        <p class="hint">PNG 為無損格式，品質與大小上限對它無效，要縮小請搭配「尺寸縮放」。關閉此區塊＝維持原格式、品質 92。輸出一律移除 EXIF（含位置資訊）。</p>
+        <p class="hint">PNG 為無損格式、GIF 最多 256 色，品質與大小上限對它們無效，要縮小請搭配「尺寸縮放」。GIF 輸出為單張靜態圖。關閉此區塊＝維持原格式、品質 92。輸出一律移除 EXIF／位置等中繼資料。</p>
       </div>
     </section>
 
-    <section class="card">
-      <header><h3>輸出</h3></header>
+    <section class="card" data-only="video" data-toggle="out.von">
+      <header><h3>影片壓縮與格式</h3><label class="switch"><input type="checkbox" data-k="out.von"><i></i></label></header>
       <div class="body">
-        <div class="field">輸出路徑
-          <input type="text" id="outPath" data-k="out.path" placeholder="貼上資料夾路徑，如 D:\輸出" style="flex:1;min-width:120px">
-          <button id="btnBrowse" class="ghost">瀏覽…</button>
+        <div class="field">格式
+          <select data-k="out.vfmt">
+            <option value="mp4">MP4（H.264）</option>
+            <option value="mov">MOV（H.264）</option>
+            <option value="webm">WebM（VP9）</option>
+            <option value="avi">AVI（MJPEG，檔案很大）</option>
+          </select>
         </div>
-        <p class="hint" id="helperNote"></p>
+        <div class="field">畫質 <input type="range" data-k="out.vquality" min="1" max="100"><span data-o="out.vquality"></span></div>
+        <div class="field">檔案大小上限 <input type="number" data-k="out.vtargetKB" min="0" style="width:90px"> KB <small class="muted">0＝不限</small></div>
+        <div class="field">幀率上限
+          <select data-k="out.fps">
+            <option value="0">維持原幀率</option>
+            <option value="60">60 fps</option>
+            <option value="30">30 fps</option>
+            <option value="24">24 fps</option>
+          </select>
+        </div>
+        <p class="hint">「畫質」控制位元率，越高檔案越大；「檔案大小上限」會依影片長度反推位元率（約略值，超過會自動再壓一次；聲音本身若就很大則可能仍會超過）。聲音保留，格式不相容時自動轉成相容的編碼。關閉此區塊＝盡量不重新編碼。處理時間取決於影片長度與電腦效能。</p>
+      </div>
+    </section>
+
+    <section class="card" data-collapse="output">
+      <header><h3>輸出</h3><span class="chev">▾</span></header>
+      <div class="body">
+        <p class="hint">Chrome / Edge 電腦版可選擇資料夾直接存入；其他瀏覽器與手機會在完成後自動下載（多張時打包成 ZIP）。</p>
         <div class="row" id="dirRow">
           <button id="btnDir">用瀏覽器選資料夾</button>
           <button id="btnDirClear" class="ghost">取消</button>
@@ -178,7 +211,6 @@
   <div class="grow"></div>
   <div id="progressWrap" hidden><div id="bar"></div></div>
   <span id="progressText"></span>
-  <button id="btnOpenDir" class="ghost" disabled>開啟輸出目錄</button>
   <button id="btnStart" class="primary">開始處理</button>
   <button id="btnCancel" class="ghost danger" hidden>取消</button>
 </footer>
@@ -187,6 +219,7 @@
 <script src="js/db.js"></script>
 <script src="js/zip.js"></script>
 <script src="js/core.js"></script>
+<script src="js/media.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
