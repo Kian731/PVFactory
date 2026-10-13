@@ -11,10 +11,12 @@
 <header>
   <h1>圖影工坊</h1>
   <span class="sub">裁切 · 浮水印 · 縮放壓縮 · 轉格式（檔案只在你的電腦處理，不會上傳）</span>
-  <nav id="modeTabs"><button data-tab="image">🖼 圖片</button><button data-tab="video">🎞 影片</button></nav>
+  <nav id="modeTabs"><button data-tab="image">🖼 圖片</button><button data-tab="video">🎞 影片</button><button data-tab="pdf">📄 PDF</button></nav>
 </header>
 
 <main>
+  <div class="resizer" id="rzL" title="拖曳調整寬度（雙擊還原）"></div>
+  <div class="resizer" id="rzR" title="拖曳調整寬度（雙擊還原）"></div>
   <!-- 左：檔案清單 -->
   <aside id="left">
     <div id="dropzone">
@@ -27,6 +29,15 @@
     <div id="vidNote" class="notice" data-only="video">
       支援：MP4 / MOV / WebM / MKV（含 H.265/HEVC）。<br>
       ⚠ 影片功能需使用 <b>Chrome 或 Edge 電腦版</b>；HEVC 能否讀取取決於你的電腦與瀏覽器的解碼支援。
+    </div>
+    <div class="notice" data-only="pdf">
+      支援 PDF（可加密碼檔）；也可加入圖片，會轉成 PDF 頁面。<br>
+      點檔案左側 ▸ 展開頁面：可刪除、旋轉、拖曳排序。
+    </div>
+    <div id="pageTools" data-only="pdf" hidden>
+      <div class="muted" id="pageToolsTitle">目前檔案頁面</div>
+      <div class="row"><input type="text" id="pageRange" placeholder="頁碼，如 1-3,5,8-" style="flex:1;min-width:0"></div>
+      <div class="row"><button id="btnKeepRange" class="ghost">只保留</button><button id="btnDelRange" class="ghost">刪除</button><button id="btnRestore" class="ghost">全部還原</button></div>
     </div>
     <div class="row">
       <button id="btnAddFiles">加入圖片</button>
@@ -61,7 +72,8 @@
     <div id="seekWrap" class="toolbar" hidden>
       <span class="muted">預覽時間：</span><input type="range" id="seek" min="0" max="1000" value="0" style="flex:1"><span id="seekT" class="muted"></span>
     </div>
-    <div id="stage"><canvas id="cv"></canvas><div id="empty">請先加入圖片</div></div>
+    <div id="stage"><canvas id="cv"></canvas>
+      <div id="stageNav" hidden><button id="navPrev" title="上一頁（←）">◀</button><span id="navText"></span><button id="navNext" title="下一頁（→）">▶</button></div><div id="empty">請先加入圖片</div></div>
     <div id="info" class="muted"></div>
   </section>
 
@@ -93,8 +105,17 @@
     <section class="card" data-toggle="wm.on">
       <header><h3>浮水印</h3><label class="switch"><input type="checkbox" data-k="wm.on"><i></i></label></header>
       <div class="body">
-        <div class="row"><button id="btnWmUpload">上傳浮水印圖片</button><input type="file" id="wmInput" accept="image/*" hidden></div>
-        <div id="wmLib"></div>
+        <div class="field">來源
+          <select data-k="wm.src"><option value="image">圖片</option><option value="text">文字</option></select>
+        </div>
+        <div data-wmsrc="image">
+          <div class="row"><button id="btnWmUpload">上傳浮水印圖片</button><input type="file" id="wmInput" accept="image/*" hidden></div>
+          <div id="wmLib"></div>
+        </div>
+        <div data-wmsrc="text">
+          <div class="field">文字 <input type="text" data-k="wm.text" placeholder="例如：機密 / © 公司名" style="flex:1;min-width:100px"></div>
+          <div class="field">顏色 <input type="color" data-k="wm.color"></div>
+        </div>
         <div class="field">位置（九宮格）<div id="grid"></div></div>
         <div class="field">邊距 <input type="range" data-k="wm.margin" min="0" max="20" step="0.5"><span data-o="wm.margin"></span>%</div>
         <div class="field">X <input type="number" id="wmX" min="0" max="100" step="0.5" style="width:70px">% Y <input type="number" id="wmY" min="0" max="100" step="0.5" style="width:70px">%
@@ -105,7 +126,7 @@
       </div>
     </section>
 
-    <section class="card" data-toggle="resize.on">
+    <section class="card" data-only="image video" data-toggle="resize.on">
       <header><h3>尺寸縮放</h3><label class="switch"><input type="checkbox" data-k="resize.on"><i></i></label></header>
       <div class="body">
         <div class="field">方式
@@ -172,10 +193,87 @@
       </div>
     </section>
 
+    <section class="card" data-only="pdf" data-toggle="pdf.resOn">
+      <header><h3>頁面尺寸</h3><label class="switch"><input type="checkbox" data-k="pdf.resOn"><i></i></label></header>
+      <div class="body">
+        <div class="field">方式
+          <select data-k="pdf.resMode">
+            <option value="percent">百分比縮放</option>
+            <option value="long">長邊（毫米）</option>
+          </select>
+        </div>
+        <div class="field" data-pres="percent">比例 <input type="number" data-k="pdf.resPercent" min="5" max="400" style="width:80px"> %</div>
+        <div class="field" data-pres="long">長邊 <input type="number" data-k="pdf.resLong" min="20" style="width:90px"> mm <small class="muted">A4＝297</small></div>
+        <p class="hint">等比縮放整份頁面（含文字與圖）。比例裁切若有開啟，會先裁切再縮放。</p>
+      </div>
+    </section>
+
+    <section class="card" data-only="pdf" data-toggle="pdf.on">
+      <header><h3>PDF 壓縮</h3><label class="switch"><input type="checkbox" data-k="pdf.on"><i></i></label></header>
+      <div class="body">
+        <div class="field">模式
+          <select data-k="pdf.mode">
+            <option value="smart">智慧壓縮（保留文字，只壓圖片）</option>
+            <option value="raster">轉圖片式（最小、最穩）</option>
+          </select>
+        </div>
+        <p class="hint" data-pmode="smart">文字與向量保持原樣，可選取搜尋；只重新壓縮 PDF 內的圖片。適合含圖簡報。壓縮空間取決於圖片多寡。</p>
+        <p class="hint" data-pmode="raster">每頁畫成圖片再組成 PDF，檔案最好控制，但<b>文字會變成圖片、無法選取搜尋</b>。適合掃描檔。</p>
+        <div class="field">圖片解析度
+          <select id="dpiPreset">
+            <option value="72">72 dpi（螢幕瀏覽）</option>
+            <option value="96">96 dpi</option>
+            <option value="150">150 dpi（一般）</option>
+            <option value="200">200 dpi</option>
+            <option value="300">300 dpi（列印）</option>
+          </select>
+          <input type="number" data-k="pdf.dpi" min="30" max="600" style="width:70px"> dpi
+        </div>
+        <div class="field">品質 <input type="range" data-k="pdf.quality" min="10" max="100"><span data-o="pdf.quality"></span></div>
+        <div class="field">容量上限 <input type="number" data-k="pdf.targetMB" min="0" step="0.1" style="width:80px"> MB <small class="muted">0＝不限；會自動降低品質／解析度</small></div>
+        <label class="chk"><input type="checkbox" data-k="pdf.gray"> 灰階（圖片轉黑白，檔案更小）</label>
+        <p class="hint">解析度以「整頁最長邊」換算：圖片超過此解析度才會縮小，已經較小的圖不會放大。容量上限為約略值，達不到時日誌會提醒。輸出會移除作者等中繼資料。</p>
+      </div>
+    </section>
+
+    <section class="card" data-only="pdf">
+      <header><h3>頁面與輸出方式</h3></header>
+      <div class="body">
+        <div class="field">輸出
+          <select data-k="pdf.out">
+            <option value="pdf">PDF</option>
+            <option value="images">逐頁轉成圖片</option>
+          </select>
+        </div>
+        <div data-pout="images">
+          <div class="field">圖片格式
+            <select data-k="pdf.imgFmt"><option value="jpg">JPG</option><option value="png">PNG</option><option value="webp">WebP</option></select>
+          </div>
+          <div class="field">解析度 <input type="number" data-k="pdf.imgDpi" min="30" max="600" style="width:70px"> dpi <small class="muted">品質沿用上方設定</small></div>
+        </div>
+        <div data-pout="pdf">
+          <label class="chk"><input type="checkbox" data-k="pdf.merge"> 合併所有檔案成一份 PDF</label>
+          <div class="field">拆分 每 <input type="number" data-k="pdf.split" min="0" style="width:60px"> 頁一份 <small class="muted">0＝不拆分</small></div>
+        </div>
+        <label class="chk"><input type="checkbox" data-k="pdf.pnOn"> 加上頁碼</label>
+        <div data-pn>
+          <div class="field">位置
+            <select data-k="pdf.pnPos">
+              <option value="bc">下方置中</option><option value="br">右下</option><option value="bl">左下</option>
+              <option value="tc">上方置中</option><option value="tr">右上</option><option value="tl">左上</option>
+            </select>
+            字級 <input type="number" data-k="pdf.pnSize" min="6" max="48" style="width:60px">
+          </div>
+          <div class="field">格式 <input type="text" data-k="pdf.pnFmt" style="width:110px"> 起始 <input type="number" data-k="pdf.pnStart" min="0" style="width:60px"></div>
+          <p class="hint">{n} 頁碼、{N} 總頁數（只含數字與英文，使用內建字型）。</p>
+        </div>
+      </div>
+    </section>
+
     <section class="card" data-collapse="output">
       <header><h3>輸出</h3><span class="chev">▾</span></header>
       <div class="body">
-        <p class="hint">Chrome / Edge 電腦版可選擇資料夾直接存入；其他瀏覽器與手機會在完成後自動下載（多張時打包成 ZIP）。</p>
+        <p class="hint">Chrome / Edge 電腦版可選擇資料夾直接存入；其他瀏覽器與手機會在完成後自動下載（多個檔案時打包成 ZIP）。</p>
         <div class="row" id="dirRow">
           <button id="btnDir">用瀏覽器選資料夾</button>
           <button id="btnDirClear" class="ghost">取消</button>
@@ -191,8 +289,10 @@
           <button class="ghost" data-tok="i" title="圖片序號：第幾張原圖">{i}</button>
           <button class="ghost" data-tok="date" title="日期 20260101">{date}</button>
           <button class="ghost" data-tok="time" title="時間 235959">{time}</button>
+          <button class="ghost" data-tok="p" data-only="pdf" title="頁碼（逐頁轉圖片時）">{p}</button>
+          <button class="ghost" data-tok="pages" data-only="pdf" title="拆分時的頁碼範圍">{pages}</button>
         </div>
-        <div class="field">流水號從 <input type="number" data-k="out.seqStart" min="0" style="width:70px"> 位數 <input type="number" data-k="out.seqPad" min="1" max="8" style="width:60px"></div>
+        <div class="field">流水號從 <input type="number" data-k="out.seqStart" min="0" style="width:70px"> 位數 <input type="number" data-k="out.seqPad" min="1" max="12" style="width:60px"></div>
         <div class="muted" id="nameEx"></div>
         <div class="field">同名檔案
           <select data-k="out.conflict">
@@ -220,6 +320,7 @@
 <script src="js/zip.js"></script>
 <script src="js/core.js"></script>
 <script src="js/media.js"></script>
+<script src="js/pdf.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
