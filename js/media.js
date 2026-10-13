@@ -265,5 +265,5 @@ const Media = (() => {
     }
   }
 
-  return { isVideo, isHeic, videoSupported, heicToJpeg, probeVideo, openPreview, closePreview, frameBitmap, videoPlan, estimateBytes, processVideo, encodeGif };
+  return { loadScript, isVideo, isHeic, videoSupported, heicToJpeg, probeVideo, openPreview, closePreview, frameBitmap, videoPlan, estimateBytes, processVideo, encodeGif };
 })();

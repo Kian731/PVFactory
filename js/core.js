@@ -15,8 +15,9 @@ const COLORS = { orig: '#ffffff', '1:1': '#ff5a5a', '2:3': '#ffb020', '3:2': '#3
 
 const DEFAULTS = {
   cropOn: true, specs: ['1:1'], custom: { w: 16, h: 9 }, pos: {},
-  wm: { on: false, id: null, anchor: 8, custom: false, margin: 3, x: 0.9, y: 0.9, size: 20, opacity: 80, rot: 0 },
+  wm: { on: false, src: 'image', text: '', color: '#777777', id: null, anchor: 8, custom: false, margin: 3, x: 0.9, y: 0.9, size: 20, opacity: 80, rot: 0 },
   resize: { on: false, mode: 'long', long: 1920, width: 1080, height: 1080, percent: 50, exactW: 1080, exactH: 1350, noUp: true },
+  pdf: { on: true, mode: 'smart', dpi: 150, quality: 75, targetMB: 0, gray: false, resOn: false, resMode: 'percent', resPercent: 100, resLong: 297, out: 'pdf', imgFmt: 'jpg', imgDpi: 150, merge: false, split: 0, pnOn: false, pnPos: 'bc', pnSize: 10, pnFmt: '{n} / {N}', pnStart: 1 },
   out: { on: true, fmt: 'orig', von: true, vfmt: 'mp4', vquality: 70, vtargetKB: 0, fps: 0, quality: 85, targetKB: 0, bg: '#ffffff', tpl: '{name}_{ratio}', seqStart: 1, seqPad: 3, conflict: 'rename' },
 };
 
