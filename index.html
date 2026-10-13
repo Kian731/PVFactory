@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>圖片處理工具</title>
+<script>try{var t=localStorage.getItem('imgtool.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header>
+  <h1>圖片處理工具</h1>
+  <span class="sub">裁切 · 浮水印 · 縮放壓縮 · 轉格式（圖片只在本機處理，不會上傳）</span>
+</header>
+
+<main>
+  <!-- 左：檔案清單 -->
+  <aside id="left">
+    <div id="dropzone">
+      <b>拖曳圖片或資料夾到這裡</b>
+      <small>或點擊選擇圖片</small>
+    </div>
+    <div class="row">
+      <button id="btnAddFiles">加入圖片</button>
+      <button id="btnAddDir">加入資料夾</button>
+    </div>
+    <div class="row">
+      <button id="btnSort" class="ghost">依檔名排序</button>
+      <button id="btnClear" class="ghost danger">清空</button>
+    </div>
+    <div id="count" class="muted">尚未加入圖片</div>
+    <div id="list"></div>
+    <input type="file" id="fileInput" accept="image/*" multiple hidden>
+    <input type="file" id="dirInput" webkitdirectory multiple hidden>
+    <div id="themeBar">介面
+      <button class="ghost" data-theme="auto">自動</button>
+      <button class="ghost" data-theme="light">淺色</button>
+      <button class="ghost" data-theme="dark">深色</button>
+    </div>
+  </aside>
+
+  <!-- 中：預覽 -->
+  <section id="center">
+    <div class="toolbar">
+      <button id="btnPrev" class="ghost">◀</button>
+      <button id="btnNext" class="ghost">▶</button>
+      <span class="muted">顯示裁切框：</span>
+      <div id="chips"></div>
+      <span class="grow"></span>
+      <button id="btnCenter" class="ghost">此張置中</button>
+      <button id="btnApplyAll" class="ghost" title="把這張目前的裁切位置設為預設，套用到所有圖片">位置套用全部</button>
+    </div>
+    <div id="stage"><canvas id="cv"></canvas><div id="empty">請先加入圖片</div></div>
+    <div id="info" class="muted"></div>
+  </section>
+
+  <!-- 右：設定 -->
+  <aside id="right">
+    <section class="card">
+      <header><h3>預設設定</h3><span id="presetBadge" class="badge" hidden></span></header>
+      <div class="body">
+        <div class="row"><input type="text" id="presetName" placeholder="預設名稱" style="flex:1"><button id="btnPresetSave">儲存</button></div>
+        <div class="row"><select id="presetSel" style="flex:1"></select><button id="btnPresetLoad">載入</button><button id="btnPresetDel" class="ghost danger">刪除</button></div>
+        <div class="row"><button id="btnExport" class="ghost">匯出全部設定</button><button id="btnImport" class="ghost">匯入</button>
+          <input type="file" id="importInput" accept=".json" hidden></div>
+        <p class="hint">預設含所有區塊的設定。匯出檔含浮水印圖庫，可帶到其他裝置。</p>
+      </div>
+    </section>
+
+    <section class="card" data-toggle="cropOn">
+      <header><h3>比例裁切</h3><label class="switch"><input type="checkbox" data-k="cropOn"><i></i></label></header>
+      <div class="body">
+        <div id="ratioList"></div>
+        <div class="row small" id="customRow">
+          自訂比例 <input type="number" data-k="custom.w" min="0.1" step="any" style="width:70px"> :
+          <input type="number" data-k="custom.h" min="0.1" step="any" style="width:70px">
+        </div>
+        <p class="hint">裁出原圖中該比例的最大區域，不縮放、不改變原有像素。可複選，一次輸出多個版本；每個裁切框都可在預覽中拖曳移動；拖四個角或在框上滾動滾輪可放大縮小（縮小＝只取更小範圍，輸出像素會變少）。</p>
+      </div>
+    </section>
+
+    <section class="card" data-toggle="wm.on">
+      <header><h3>浮水印</h3><label class="switch"><input type="checkbox" data-k="wm.on"><i></i></label></header>
+      <div class="body">
+        <div class="row"><button id="btnWmUpload">上傳浮水印圖片</button><input type="file" id="wmInput" accept="image/*" hidden></div>
+        <div id="wmLib"></div>
+        <div class="field">位置（九宮格）<div id="grid"></div></div>
+        <div class="field">邊距 <input type="range" data-k="wm.margin" min="0" max="20" step="0.5"><span data-o="wm.margin"></span>%</div>
+        <div class="field">X <input type="number" id="wmX" min="0" max="100" step="0.5" style="width:70px">% Y <input type="number" id="wmY" min="0" max="100" step="0.5" style="width:70px">%
+          <small class="muted">中心點；可在預覽拖曳</small></div>
+        <div class="field">大小 <input type="range" data-k="wm.size" min="2" max="100" step="1"><span data-o="wm.size"></span>% <small class="muted">圖寬</small></div>
+        <div class="field">透明度 <input type="range" data-k="wm.opacity" min="5" max="100"><span data-o="wm.opacity"></span>%</div>
+        <div class="field">旋轉 <input type="range" data-k="wm.rot" min="-180" max="180"><span data-o="wm.rot"></span>°</div>
+      </div>
+    </section>
+
+    <section class="card" data-toggle="resize.on">
+      <header><h3>尺寸縮放</h3><label class="switch"><input type="checkbox" data-k="resize.on"><i></i></label></header>
+      <div class="body">
+        <div class="field">方式
+          <select data-k="resize.mode">
+            <option value="long">長邊上限</option>
+            <option value="width">指定寬度（等比）</option>
+            <option value="height">指定高度（等比）</option>
+            <option value="percent">百分比縮放</option>
+            <option value="exact">指定 寬×高</option>
+          </select>
+        </div>
+        <div class="field" data-mode="long">長邊 <input type="number" data-k="resize.long" min="16" style="width:90px"> px</div>
+        <div class="field" data-mode="width">寬度 <input type="number" data-k="resize.width" min="16" style="width:90px"> px</div>
+        <div class="field" data-mode="height">高度 <input type="number" data-k="resize.height" min="16" style="width:90px"> px</div>
+        <div class="field" data-mode="percent">比例 <input type="number" data-k="resize.percent" min="1" max="400" style="width:80px"> %</div>
+        <div class="field" data-mode="exact"><input type="number" data-k="resize.exactW" min="16" style="width:80px"> × <input type="number" data-k="resize.exactH" min="16" style="width:80px"> px</div>
+        <p class="hint" data-mode="exact">與裁切比例不同時，會再從中間多裁一次以符合寬高。</p>
+        <label class="chk"><input type="checkbox" data-k="resize.noUp"> 不放大小圖</label>
+        <p class="hint">勾選後，圖片本來就比目標尺寸小時會維持原尺寸，不會硬拉大（拉大會變模糊）。例如長邊上限 1920，一張 800px 的圖會維持 800px。</p>
+      </div>
+    </section>
+
+    <section class="card" data-toggle="out.on">
+      <header><h3>壓縮與格式</h3><label class="switch"><input type="checkbox" data-k="out.on"><i></i></label></header>
+      <div class="body">
+        <div class="field">格式
+          <select data-k="out.fmt">
+            <option value="orig">維持原格式</option>
+            <option value="jpg">JPG</option>
+            <option value="png">PNG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </div>
+        <div class="field">品質 <input type="range" data-k="out.quality" min="1" max="100"><span data-o="out.quality"></span></div>
+        <div class="field">檔案大小上限 <input type="number" data-k="out.targetKB" min="0" style="width:90px"> KB <small class="muted">0＝不限；超過會自動降低品質</small></div>
+        <div class="field">透明轉 JPG 的底色 <input type="color" data-k="out.bg"></div>
+        <p class="hint">PNG 為無損格式，品質與大小上限對它無效，要縮小請搭配「尺寸縮放」。關閉此區塊＝維持原格式、品質 92。輸出一律移除 EXIF（含位置資訊）。</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <header><h3>輸出</h3></header>
+      <div class="body">
+        <div class="field">輸出路徑
+          <input type="text" id="outPath" data-k="out.path" placeholder="貼上資料夾路徑，如 D:\輸出" style="flex:1;min-width:120px">
+          <button id="btnBrowse" class="ghost">瀏覽…</button>
+        </div>
+        <p class="hint" id="helperNote"></p>
+        <div class="row" id="dirRow">
+          <button id="btnDir">用瀏覽器選資料夾</button>
+          <button id="btnDirClear" class="ghost">取消</button>
+        </div>
+        <div id="dirName" class="muted"></div>
+        <div class="field">檔名 <input type="text" id="tpl" data-k="out.tpl" style="flex:1;min-width:120px"></div>
+        <div id="tokens">
+          <button class="ghost" data-tok="name" title="原檔名">{name}</button>
+          <button class="ghost" data-tok="ratio" title="裁切比例，如 4x5">{ratio}</button>
+          <button class="ghost" data-tok="w" title="輸出寬度">{w}</button>
+          <button class="ghost" data-tok="h" title="輸出高度">{h}</button>
+          <button class="ghost" data-tok="n" title="流水號：每輸出一個檔案 +1">{n}</button>
+          <button class="ghost" data-tok="i" title="圖片序號：第幾張原圖">{i}</button>
+          <button class="ghost" data-tok="date" title="日期 20260101">{date}</button>
+          <button class="ghost" data-tok="time" title="時間 235959">{time}</button>
+        </div>
+        <div class="field">流水號從 <input type="number" data-k="out.seqStart" min="0" style="width:70px"> 位數 <input type="number" data-k="out.seqPad" min="1" max="8" style="width:60px"></div>
+        <div class="muted" id="nameEx"></div>
+        <div class="field">同名檔案
+          <select data-k="out.conflict">
+            <option value="rename">自動編號</option>
+            <option value="overwrite">覆蓋</option>
+            <option value="skip">略過</option>
+          </select>
+        </div>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <div id="estimate" class="muted"></div>
+  <div class="grow"></div>
+  <div id="progressWrap" hidden><div id="bar"></div></div>
+  <span id="progressText"></span>
+  <button id="btnOpenDir" class="ghost" disabled>開啟輸出目錄</button>
+  <button id="btnStart" class="primary">開始處理</button>
+  <button id="btnCancel" class="ghost danger" hidden>取消</button>
+</footer>
+<div id="log" hidden></div>
+
+<script src="js/db.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/core.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
