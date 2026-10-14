@@ -626,7 +626,7 @@
             if (v.warn) logMsg(`${it.name}：${v.warn}`);
           } else {
             const mime = mimeFor(e, it.file);
-            const out = renderOutput(b, posOf(it, key), e, spec, wmImg, mime);
+            const out = await renderOutputQ(b, posOf(it, key), e, spec, wmImg, mime);
             const r = await encodeCanvas(out, mime, e);
             if (r.over) over++;
             blob = r.blob; ext = EXT[mime]; ow = out.width; oh = out.height;

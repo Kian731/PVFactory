@@ -18,7 +18,7 @@ const DEFAULTS = {
   wm: { on: false, src: 'image', text: '', color: '#777777', id: null, anchor: 8, custom: false, margin: 3, x: 0.9, y: 0.9, size: 20, opacity: 80, rot: 0 },
   resize: { on: false, mode: 'long', long: 1920, width: 1080, height: 1080, percent: 50, exactW: 1080, exactH: 1350, noUp: true },
   pdf: { on: true, mode: 'smart', dpi: 150, quality: 75, targetMB: 0, gray: false, resOn: false, resMode: 'percent', resPercent: 100, resLong: 297, out: 'pdf', imgFmt: 'jpg', imgDpi: 150, merge: false, split: 0, pnOn: false, pnPos: 'bc', pnSize: 10, pnFmt: '{n} / {N}', pnStart: 1 },
-  out: { on: true, fmt: 'orig', von: true, vfmt: 'mp4', vquality: 70, vtargetKB: 0, fps: 0, quality: 85, targetKB: 0, bg: '#ffffff', tpl: '{name}_{ratio}', seqStart: 1, seqPad: 3, conflict: 'rename' },
+  out: { on: true, fmt: 'orig', von: true, vfmt: 'mp4', vquality: 70, vtargetKB: 0, fps: 0, quality: 90, targetKB: 0, bg: '#ffffff', tpl: '{name}_{ratio}', seqStart: 1, seqPad: 3, conflict: 'rename' },
 };
 
 // 移除舊版殘留、不在預設結構內的欄位（pos 例外）
@@ -142,6 +142,91 @@ function renderOutput(bmp, pos, S, spec, wmImg, mime) {
   return cv;
 }
 
+// ---------- Lanczos3 縮小（比瀏覽器內建縮放銳利、細節保留較好）----------
+// 自成一體的函式：同時用在背景執行緒與主執行緒備援。src 為 RGBA（straight alpha）。
+function lanczosResize(src, sw, sh, W, H) {
+  const lan = t => { t = Math.abs(t); if (t >= 3) return 0; if (t < 1e-8) return 1; const p = Math.PI * t; return 3 * Math.sin(p) * Math.sin(p / 3) / (p * p); };
+  const weights = (sIn, sOut) => {
+    const sc = sIn / sOut, f = Math.max(1, sc), sup = 3 * f, out = [];
+    for (let o = 0; o < sOut; o++) {
+      const c = (o + 0.5) * sc, lo = Math.max(0, Math.floor(c - sup)), hi = Math.min(sIn - 1, Math.ceil(c + sup));
+      const w = new Float32Array(hi - lo + 1); let s = 0;
+      for (let i = lo; i <= hi; i++) { const v = lan((i + 0.5 - c) / f); w[i - lo] = v; s += v; }
+      for (let k = 0; k < w.length; k++) w[k] /= s;
+      out.push({ lo, w });
+    }
+    return out;
+  };
+  const wx = weights(sw, W), wy = weights(sh, H);
+  const tmp = new Float32Array(W * sh * 4);          // 水平縮小後（alpha 預乘）
+  for (let y = 0; y < sh; y++) {
+    const row = y * sw * 4, orow = y * W * 4;
+    for (let x = 0; x < W; x++) {
+      const { lo, w } = wx[x];
+      let r = 0, g = 0, b = 0, a = 0, idx = row + lo * 4;
+      for (let k = 0; k < w.length; k++, idx += 4) {
+        const wk = w[k], al = src[idx + 3];
+        if (al === 255) { r += src[idx] * wk; g += src[idx + 1] * wk; b += src[idx + 2] * wk; a += 255 * wk; }
+        else if (al) { const f = al / 255 * wk; r += src[idx] * f; g += src[idx + 1] * f; b += src[idx + 2] * f; a += al * wk; }
+      }
+      const o = orow + x * 4; tmp[o] = r; tmp[o + 1] = g; tmp[o + 2] = b; tmp[o + 3] = a;
+    }
+  }
+  const out = new Uint8ClampedArray(W * H * 4), acc = new Float32Array(W * 4);
+  for (let y = 0; y < H; y++) {
+    const { lo, w } = wy[y];
+    acc.fill(0);
+    for (let k = 0; k < w.length; k++) {
+      const wk = w[k], base = (lo + k) * W * 4;
+      for (let i = 0; i < W * 4; i++) acc[i] += tmp[base + i] * wk;
+    }
+    const orow = y * W * 4;
+    for (let x = 0; x < W; x++) {
+      const i = x * 4, a = acc[i + 3];
+      if (a > 0.5) { const inv = 255 / a; out[orow + i] = acc[i] * inv; out[orow + i + 1] = acc[i + 1] * inv; out[orow + i + 2] = acc[i + 2] * inv; out[orow + i + 3] = a; }
+    }
+  }
+  return out;
+}
+let _lanWorker = null, _lanSeq = 0;
+function lanczosAsync(buf, sw, sh, W, H) {
+  return new Promise((resolve, reject) => {
+    const fallback = () => { try { resolve(lanczosResize(new Uint8ClampedArray(buf), sw, sh, W, H)); } catch (e) { reject(e); } };
+    try {
+      if (!_lanWorker) {
+        const code = 'const lanczosResize=' + lanczosResize.toString() + ';self.onmessage=e=>{const d=e.data;const o=lanczosResize(new Uint8ClampedArray(d.buf),d.sw,d.sh,d.W,d.H);self.postMessage({id:d.id,out:o},[o.buffer])};';
+        _lanWorker = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+      }
+      const id = ++_lanSeq, w = _lanWorker;
+      const done = e => { if (e.data.id !== id) return; w.removeEventListener('message', done); w.removeEventListener('error', fail); resolve(e.data.out); };
+      const fail = () => { w.removeEventListener('message', done); w.removeEventListener('error', fail); _lanWorker = null; fallback(); };
+      w.addEventListener('message', done); w.addEventListener('error', fail);
+      w.postMessage({ id, buf, sw, sh, W, H }, [buf]);
+    } catch { _lanWorker = null; fallback(); }
+  });
+}
+
+// 與 renderOutput 相同，但縮小幅度明顯時改用 Lanczos3（輸出用；預估大小時仍用較快的 renderOutput）
+async function renderOutputQ(bmp, pos, S, spec, wmImg, mime) {
+  const c = cropRect(bmp.width, bmp.height, spec.ratio, pos.x, pos.y, pos.z);
+  const p = targetPlan(S.resize, c.w, c.h);
+  if (!(p.W < p.sw * 0.9 || p.H < p.sh * 0.9)) return renderOutput(bmp, pos, S, spec, wmImg, mime);
+  const srcCv = document.createElement('canvas'); srcCv.width = p.sw; srcCv.height = p.sh;
+  const sctx = srcCv.getContext('2d', { willReadFrequently: true });
+  sctx.drawImage(bmp, c.x + p.sx, c.y + p.sy, p.sw, p.sh, 0, 0, p.sw, p.sh);
+  const data = sctx.getImageData(0, 0, p.sw, p.sh).data;
+  srcCv.width = srcCv.height = 1;                       // 釋放記憶體
+  const px = await lanczosAsync(data.buffer, p.sw, p.sh, p.W, p.H);
+  const tmp = document.createElement('canvas'); tmp.width = p.W; tmp.height = p.H;
+  tmp.getContext('2d').putImageData(new ImageData(px, p.W, p.H), 0, 0);
+  const cv = document.createElement('canvas'); cv.width = p.W; cv.height = p.H;
+  const ctx = cv.getContext('2d');
+  if (mime === 'image/jpeg') { ctx.fillStyle = S.out.bg; ctx.fillRect(0, 0, p.W, p.H); }
+  ctx.drawImage(tmp, 0, 0);
+  if (S.wm.on && wmImg) drawWm(ctx, p.W, p.H, S.wm, wmImg);
+  return cv;
+}
+
 const toBlob = (cv, mime, q) => new Promise(res => cv.toBlob(res, mime, q));
 
 // 編碼；若設定檔案大小上限，二分搜尋品質。回傳 {blob, over}
@@ -152,11 +237,11 @@ async function encodeCanvas(cv, mime, S) {
   if (mime === 'image/png' || !target) return { blob: await toBlob(cv, mime, q), over: false };
   const first = await toBlob(cv, mime, q);
   if (first.size <= target) return { blob: first, over: false };
-  let lo = 0.02, hi = q, best = null;
+  let lo = 0.4, hi = q, best = null;
   for (let i = 0; i < 8; i++) {
     const mid = (lo + hi) / 2, b = await toBlob(cv, mime, mid);
     if (b.size <= target) { best = b; lo = mid; } else hi = mid;
   }
   if (best) return { blob: best, over: false };
-  return { blob: await toBlob(cv, mime, 0.02), over: true };
+  return { blob: await toBlob(cv, mime, 0.4), over: true };
 }
