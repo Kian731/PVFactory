@@ -68,8 +68,9 @@
         if (el.type === 'checkbox') v = el.checked;
         else if (el.type === 'number' || el.type === 'range') { v = parseFloat(el.value); if (isNaN(v)) return; }
         else v = el.value;
-        setPath(S, k, v);
-        if (k === 'wm.margin') S.wm.custom = false;
+        const sub = k.startsWith('wm.') ? k.slice(3) : null;
+        if (sub && WM_GEOM.includes(sub)) setWm(sub === 'margin' ? { margin: v, custom: false } : { [sub]: v });
+        else setPath(S, k, v);
         changed();
       });
     });
@@ -77,7 +78,7 @@
 
   function syncUI() {
     $$('[data-k]').forEach(el => {
-      const v = getPath(S, el.dataset.k);
+      const v = getVal(el.dataset.k);
       if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
     });
     renderRatioList();
@@ -86,7 +87,7 @@
   }
 
   function syncDependent() {
-    $$('[data-o]').forEach(el => el.textContent = getPath(S, el.dataset.o));
+    $$('[data-o]').forEach(el => el.textContent = getVal(el.dataset.o));
     $$('.card[data-toggle]').forEach(c => c.classList.toggle('on', !!getPath(S, c.dataset.toggle)));
     $$('[data-mode]').forEach(el => el.hidden = el.dataset.mode !== S.resize.mode);
     $$('[data-pres]').forEach(el => el.hidden = el.dataset.pres !== S.pdf.resMode);
@@ -97,7 +98,8 @@
     $('#dpiPreset').value = String(S.pdf.dpi);
     $('#customRow').hidden = !S.specs.includes('custom');
     $('#ratioList').style.opacity = S.cropOn ? 1 : .5;
-    $$('#grid button').forEach((b, i) => b.classList.toggle('on', !S.wm.custom && S.wm.anchor === i));
+    syncWmControls();
+    syncWmScopeUI();
     renderChips();
     updateWmXY();
     updateNameExample();
@@ -127,7 +129,7 @@
       const b = document.createElement('button');
       b.textContent = '·';
       b.title = ['左上', '上中', '右上', '左中', '正中', '右中', '左下', '下中', '右下'][i];
-      b.addEventListener('click', () => { S.wm.anchor = i; S.wm.custom = false; changed(); });
+      b.addEventListener('click', () => { setWm({ anchor: i, custom: false }); changed(); });
       g.appendChild(b);
     }
   }
@@ -135,19 +137,65 @@
   function updateWmXY() {
     const img = curWmImg(), x = $('#wmX'), y = $('#wmY'), f = frames()[0];
     if (!img || !f) { if (document.activeElement !== x) x.value = ''; if (document.activeElement !== y) y.value = ''; return; }
-    const p = wmPlacement(f.c.w, f.c.h, S.wm, img);
+    const p = wmPlacement(f.c.w, f.c.h, wmView(), img);
     if (document.activeElement !== x) x.value = (p.cx / f.c.w * 100).toFixed(1);
     if (document.activeElement !== y) y.value = (p.cy / f.c.h * 100).toFixed(1);
   }
   function wmXYInput() {
     const x = parseFloat($('#wmX').value), y = parseFloat($('#wmY').value);
-    const img = curWmImg(), f = frames()[0];
-    if (img && f) { const p = wmPlacement(f.c.w, f.c.h, S.wm, img); if (!S.wm.custom) { S.wm.x = p.cx / f.c.w; S.wm.y = p.cy / f.c.h; } }
-    if (!isNaN(x)) S.wm.x = clamp(x / 100, 0, 1);
-    if (!isNaN(y)) S.wm.y = clamp(y / 100, 0, 1);
-    S.wm.custom = true; save(); draw(); scheduleEstimate(); updatePresetBadge();
+    const img = curWmImg(), f = frames()[0], v = wmView(), patch = { custom: true };
+    if (img && f && !v.custom) { const p = wmPlacement(f.c.w, f.c.h, v, img); patch.x = p.cx / f.c.w; patch.y = p.cy / f.c.h; }
+    if (!isNaN(x)) patch.x = clamp(x / 100, 0, 1);
+    if (!isNaN(y)) patch.y = clamp(y / 100, 0, 1);
+    setWm(patch); save(); draw(); scheduleEstimate(); updatePresetBadge();
     $$('#grid button').forEach(b => b.classList.remove('on'));
   }
+
+  // ---------- 浮水印：個別／多選設定（圖片模式）----------
+  // 全域設定在 S.wm；每個檔案可有個別覆寫 it.wm（位置、大小、透明度、旋轉，或 skip＝不加浮水印）
+  const WM_GEOM = ['anchor', 'custom', 'margin', 'x', 'y', 'size', 'opacity', 'rot'];
+  const selIds = new Set();
+  let selAnchor = -1, wmScope = 'all';
+  const wmFor = it => (it && it.wm ? { ...S.wm, ...it.wm } : S.wm);
+  const wmOff = it => !!(it && it.wm && it.wm.skip);
+  const eW = (it, e) => ({ ...e, wm: { ...wmFor(it), on: S.wm.on && !wmOff(it) } });
+  function scopeTargets() {
+    if (mode !== 'image' || wmScope !== 'sel') return null;
+    const t = items.filter(i => selIds.has(i.id));
+    return t.length ? t : (curItem() ? [curItem()] : null);
+  }
+  const wmView = () => (scopeTargets() ? wmFor(curItem()) : S.wm);
+  function setWm(patch) {
+    const t = scopeTargets();
+    if (t) t.forEach(it => { it.wm = { ...(it.wm || {}), ...patch }; });
+    else Object.assign(S.wm, patch);
+  }
+  const getVal = k => (k.startsWith('wm.') && WM_GEOM.includes(k.slice(3)) ? wmView()[k.slice(3)] : getPath(S, k));
+  function syncWmControls() {
+    const v = wmView();
+    $$('[data-k^="wm."]').forEach(el => { const s = el.dataset.k.slice(3); if (WM_GEOM.includes(s)) el.value = v[s]; });
+    $$('[data-o^="wm."]').forEach(el => { const s = el.dataset.o.slice(3); if (WM_GEOM.includes(s)) el.textContent = v[s]; });
+    $$('#grid button').forEach((b, i) => b.classList.toggle('on', !v.custom && v.anchor === i));
+  }
+  function syncWmScopeUI() {
+    const t = scopeTargets(), nOv = items.filter(i => i.wm).length;
+    $$('[data-scope]').forEach(b => b.classList.toggle('on', b.dataset.scope === wmScope));
+    $('#selCount').textContent = selIds.size;
+    $('#wmOvRow').hidden = mode !== 'image' || !(t || nOv);
+    $('#btnWmSkip').hidden = !t;
+    if (t) $('#btnWmSkip').textContent = t.every(wmOff) ? '恢復加浮水印' : '選取的檔案不加浮水印';
+    $('#btnWmReset').textContent = t ? '選取的檔案還原為統一設定' : `清除所有個別設定（${nOv}）`;
+    $('#btnWmReset').hidden = !(t ? t.some(i => i.wm) : nOv);
+    $('#wmScopeNote').textContent = t ? `目前調整的是「選取的 ${t.length} 個檔案」，其他檔案不受影響。` : (nOv ? `有 ${nOv} 個檔案使用個別設定，不受「全部檔案」的位置／大小調整影響。` : '');
+  }
+  function selectRow(i, e) {
+    const it = items[i]; if (!it) return;
+    if (e.shiftKey && selAnchor >= 0) { const a = Math.min(selAnchor, i), b = Math.max(selAnchor, i); selIds.clear(); items.slice(a, b + 1).forEach(x => selIds.add(x.id)); }
+    else if (e.ctrlKey || e.metaKey) { selIds.has(it.id) ? selIds.delete(it.id) : selIds.add(it.id); selAnchor = i; }
+    else { selIds.clear(); selIds.add(it.id); selAnchor = i; }
+    if (selIds.size >= 2) wmScope = 'sel';
+  }
+  function refreshSel() { updateList(); syncDependent(); draw(); scheduleEstimate(); }
 
   // ---------- 檔案加入 ----------
   const IMG_RE = /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif)$/i;
@@ -279,7 +327,7 @@
     const n = E().specs.length;
     $('#count').textContent = items.length ? `共 ${items.length} 個檔案 × ${n} 種規格 = ${items.length * n} 個輸出` : '尚未加入檔案';
     $('#list').innerHTML = items.map((it, i) =>
-      `<div class="item ${i === cur ? 'sel' : ''}" data-i="${i}"><img src="${it.thumb}"><div class="meta"><div class="nm" title="${it.name}">${it.kind === 'video' ? '🎞 ' : ''}${it.name}</div><small>${it.w}×${it.h}${it.kind === 'video' ? ' · ' + fmtDur(it.dur) : ''}${it.pos ? ' · 已手動調整' : ''}</small></div><button class="x" data-x="${i}" title="移除">✕</button></div>`).join('');
+      `<div class="item ${i === cur ? 'sel' : ''} ${selIds.has(it.id) ? 'msel' : ''}" data-i="${i}">${mode === 'image' ? `<input type="checkbox" class="rs" data-s="${i}" title="勾選（可多選，Ctrl／Shift 也行）" ${selIds.has(it.id) ? 'checked' : ''}>` : ''}<img src="${it.thumb}"><div class="meta"><div class="nm" title="${it.name}">${it.kind === 'video' ? '🎞 ' : ''}${it.name}</div><small>${it.w}×${it.h}${it.kind === 'video' ? ' · ' + fmtDur(it.dur) : ''}${it.pos ? ' · 已手動調整' : ''}${it.wm ? (it.wm.skip ? ' · 無浮水印' : ' · 個別浮水印') : ''}</small></div><button class="x" data-x="${i}" title="移除">✕</button></div>`).join('');
     $('#empty').hidden = items.length > 0;
   }
 
@@ -341,7 +389,7 @@
         ctx.save();
         ctx.beginPath(); ctx.rect(cx, cy, cw, ch); ctx.clip();
         ctx.translate(cx, cy); ctx.scale(s, s);
-        drawWm(ctx, f.c.w, f.c.h, S.wm, wi);
+        if (!wmOff(curItem())) drawWm(ctx, f.c.w, f.c.h, wmFor(curItem()), wi);
         ctx.restore();
       }
       ctx.strokeStyle = f.color; ctx.lineWidth = 2; ctx.strokeRect(cx, cy, cw, ch);
@@ -401,7 +449,7 @@
       try {
         for (const f of frames()) {
           const mime = mimeFor(e, it.file);
-          const out = renderOutput(bmp, posOf(it, f.key), e, f.spec, curWmImg(), mime);
+          const out = renderOutput(bmp, posOf(it, f.key), eW(it, e), f.spec, curWmImg(), mime);
           const r = await encodeCanvas(out, mime, e);
           if (tk !== estTok) return;
           res.push(`${f.spec.suffix} ${out.width}×${out.height} ${fmtSize(r.blob.size)}${r.over ? '⚠' : ''}`);
@@ -431,8 +479,8 @@
       for (const [cx, cy, dx, dy] of [[x, y, -1, -1], [x + w, y, 1, -1], [x, y + h, -1, 1], [x + w, y + h, 1, 1]])
         if (Math.abs(pt.x - cx) <= hr && Math.abs(pt.y - cy) <= hr) return { type: 'resize', f, ax: dx > 0 ? x : x + w, ay: dy > 0 ? y : y + h, dx, dy };
     }
-    if (wi) for (const f of fr) {
-      const p = wmPlacement(f.c.w, f.c.h, S.wm, wi), rx = pt.x - f.c.x, ry = pt.y - f.c.y;
+    if (wi && !wmOff(curItem())) for (const f of fr) {
+      const p = wmPlacement(f.c.w, f.c.h, wmFor(curItem()), wi), rx = pt.x - f.c.x, ry = pt.y - f.c.y;
       if (Math.abs(rx - p.cx) <= p.w / 2 && Math.abs(ry - p.cy) <= p.h / 2 && rx >= 0 && ry >= 0 && rx <= f.c.w && ry <= f.c.h) return { type: 'wm', f, ox: rx - p.cx, oy: ry - p.cy };
     }
     for (const f of fr) if (f.spec.ratio && pt.x >= f.c.x && pt.x <= f.c.x + f.c.w && pt.y >= f.c.y && pt.y <= f.c.y + f.c.h) return { type: 'crop', f };
@@ -462,9 +510,7 @@
       storeRect(drag.f.key, dx > 0 ? ax : ax - nw, dy > 0 ? ay : ay - nh, Math.round(nw), Math.round(nh));
       draw();
     } else if (drag.type === 'wm') {
-      S.wm.custom = true;
-      S.wm.x = clamp((pt.x - c.x - drag.ox) / c.w, 0, 1);
-      S.wm.y = clamp((pt.y - c.y - drag.oy) / c.h, 0, 1);
+      setWm({ custom: true, x: clamp((pt.x - c.x - drag.ox) / c.w, 0, 1), y: clamp((pt.y - c.y - drag.oy) / c.h, 0, 1) });
       draw();
     } else {
       const fx = bmp.width - c.w, fy = bmp.height - c.h, np = { ...drag.pos };
@@ -626,7 +672,7 @@
             if (v.warn) logMsg(`${it.name}：${v.warn}`);
           } else {
             const mime = mimeFor(e, it.file);
-            const out = await renderOutputQ(b, posOf(it, key), e, spec, wmImg, mime);
+            const out = await renderOutputQ(b, posOf(it, key), eW(it, e), spec, wmImg, mime);
             const r = await encodeCanvas(out, mime, e);
             if (r.over) over++;
             blob = r.blob; ext = EXT[mime]; ow = out.width; oh = out.height;
@@ -737,16 +783,23 @@
     });
 
     $('#list').addEventListener('click', async e => {
+      const cb = e.target.closest('[data-s]');
+      if (cb && mode === 'image') {
+        const k = +cb.dataset.s, it0 = items[k];
+        selIds.has(it0.id) ? selIds.delete(it0.id) : selIds.add(it0.id); selAnchor = k;
+        if (selIds.size >= 2) wmScope = 'sel';
+        refreshSel(); return;
+      }
       const x = e.target.closest('[data-x]');
       if (x) {
-        const i = +x.dataset.x; if (mode === 'pdf') Pdf.dispose(items[i]); items.splice(i, 1);
+        const i = +x.dataset.x; selIds.delete(items[i].id); if (mode === 'pdf') Pdf.dispose(items[i]); items.splice(i, 1);
         if (!items.length) await select(-1); else await select(Math.min(cur > i ? cur - 1 : cur, items.length - 1));
         updateList(); return;
       }
-      const it = e.target.closest('.item'); if (it) select(+it.dataset.i);
+      const it = e.target.closest('.item'); if (it) { if (mode === 'image') selectRow(+it.dataset.i, e); await select(+it.dataset.i); }
     });
     $('#btnSort').addEventListener('click', () => { const c = items[cur]; items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })); cur = items.indexOf(c); updateList(); });
-    $('#btnClear').addEventListener('click', async () => { if (items.length && confirm(`清空${MODE_NAME[mode]}清單？`)) { if (mode === 'pdf') items.forEach(Pdf.dispose); items = []; await select(-1); } });
+    $('#btnClear').addEventListener('click', async () => { if (items.length && confirm(`清空${MODE_NAME[mode]}清單？`)) { if (mode === 'pdf') items.forEach(Pdf.dispose); selIds.clear(); items = []; await select(-1); } });
     $('#navPrev').addEventListener('click', () => step(-1));
     $('#navNext').addEventListener('click', () => step(1));
     document.addEventListener('keydown', e => {
@@ -801,6 +854,19 @@
     $('#btnRestore').addEventListener('click', () => { const d = curItem(); if (!d) return; d.pages.forEach(pg => pg.del = false); updatePdfList(); scheduleEstimate(); });
     $('#dpiPreset').addEventListener('change', e => { S.pdf.dpi = +e.target.value; syncUI(); changed(); });
 
+    $$('[data-scope]').forEach(b => b.addEventListener('click', () => { wmScope = b.dataset.scope; syncDependent(); draw(); }));
+    $('#btnSelAll').addEventListener('click', () => { items.forEach(i => selIds.add(i.id)); if (selIds.size >= 2) wmScope = 'sel'; refreshSel(); });
+    $('#btnWmSkip').addEventListener('click', () => {
+      const t = scopeTargets(); if (!t) return;
+      const off = !t.every(wmOff);
+      t.forEach(it => { it.wm = { ...(it.wm || {}), skip: off }; if (!off) delete it.wm.skip; if (!Object.keys(it.wm).length) delete it.wm; });
+      changed();
+    });
+    $('#btnWmReset').addEventListener('click', () => {
+      const t = scopeTargets();
+      (t || items).forEach(it => { delete it.wm; });
+      changed();
+    });
     $('#wmX').addEventListener('input', wmXYInput);
     $('#wmY').addEventListener('input', wmXYInput);
     $('#btnWmUpload').addEventListener('click', () => $('#wmInput').click());

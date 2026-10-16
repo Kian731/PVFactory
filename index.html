@@ -45,6 +45,7 @@
     </div>
     <div class="row">
       <button id="btnSort" class="ghost">依檔名排序</button>
+      <button id="btnSelAll" class="ghost" data-only="image">全選</button>
       <button id="btnClear" class="ghost danger">清空</button>
     </div>
     <div id="count" class="muted">尚未加入圖片</div>
@@ -105,6 +106,15 @@
     <section class="card" data-toggle="wm.on">
       <header><h3>浮水印</h3><label class="switch"><input type="checkbox" data-k="wm.on"><i></i></label></header>
       <div class="body">
+        <div class="field" data-only="image">調整對象
+          <div class="seg"><button data-scope="all" class="on">全部檔案</button><button data-scope="sel">選取的檔案（<span id="selCount">0</span>）</button></div>
+        </div>
+        <p class="hint" data-only="image">下方的位置、大小、透明度、旋轉，預設套用到「全部檔案」。想個別調整：在左側清單勾選檔案（可多選，或按住 Ctrl／Shift 點選），再切到「選取的檔案」。只選一個就是單獨調整。</p>
+        <p class="hint" id="wmScopeNote" data-only="image"></p>
+        <div class="row" id="wmOvRow" data-only="image" hidden>
+          <button id="btnWmSkip" class="ghost"></button>
+          <button id="btnWmReset" class="ghost"></button>
+        </div>
         <div class="field">來源
           <select data-k="wm.src"><option value="image">圖片</option><option value="text">文字</option></select>
         </div>
