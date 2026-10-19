@@ -9,7 +9,7 @@
   let items = [];            // {id, file, name, w, h, thumb, pos:{key:{x,y}}|null}
   let cur = -1, bmp = null, selToken = 0;
   let mode = 'image';        // 'image' | 'video'：兩種模式各有自己的檔案清單
-  const modeState = { image: { items: [], cur: -1 }, video: { items: [], cur: -1 }, pdf: { items: [], cur: -1 } };
+  const modeState = { image: { items: [], cur: -1 }, video: { items: [], cur: -1 }, pdf: { items: [], cur: -1 }, collage: { items: [], cur: -1 } };
   let wmList = [];           // {id, name, blob}
   const wmImgs = {};         // id -> ImageBitmap
   const hiddenKeys = new Set(); // 預覽中隱藏的裁切框
@@ -71,6 +71,7 @@
         const sub = k.startsWith('wm.') ? k.slice(3) : null;
         if (sub && WM_GEOM.includes(sub)) setWm(sub === 'margin' ? { margin: v, custom: false } : { [sub]: v });
         else setPath(S, k, v);
+        if (k === 'collage.free' && v) ensureBoxes();
         changed();
       });
     });
@@ -95,6 +96,7 @@
     $$('[data-pout]').forEach(el => el.hidden = el.dataset.pout !== S.pdf.out);
     $$('[data-wmsrc]').forEach(el => el.hidden = el.dataset.wmsrc !== S.wm.src);
     $$('[data-pn]').forEach(el => el.hidden = !S.pdf.pnOn);
+    syncCollageUI();
     $('#dpiPreset').value = String(S.pdf.dpi);
     $('#customRow').hidden = !S.specs.includes('custom');
     $('#ratioList').style.opacity = S.cropOn ? 1 : .5;
@@ -201,17 +203,20 @@
   const IMG_RE = /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif)$/i;
   const fmtDur = s => { s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
   async function addFiles(files) {
-    let wrong = 0;
+    let wrong = 0, tooMany = 0;
     for (const f of files) {
       if (!f) continue;
       const vid = Media.isVideo(f), pdf = Pdf.isPdf(f), img = !vid && !pdf && (f.type.startsWith('image/') || IMG_RE.test(f.name));
       if (!vid && !pdf && !img) continue;
-      if ((mode === 'image' && (vid || pdf)) || (mode === 'video' && (img || pdf)) || (mode === 'pdf' && vid)) { wrong++; continue; }
+      if ((mode === 'image' && (vid || pdf)) || (mode === 'video' && (img || pdf)) || (mode === 'pdf' && vid) || (mode === 'collage' && (vid || pdf))) { wrong++; continue; }
+      if (mode === 'collage' && items.length >= Collage.MAX) { tooMany++; continue; }
       if (mode === 'pdf') await addPdfDoc(f); else if (vid) await addVideo(f); else await addImage(f);
       if (items.length && cur < 0) await select(0);
     }
+    if (tooMany) logMsg(`拼接最多 ${Collage.MAX} 張，已略過 ${tooMany} 張。`, true);
     if (wrong) logMsg(`已略過 ${wrong} 個不屬於「${MODE_NAME[mode]}」模式的檔案，請從右上角切換模式後再加入。`, true);
     updateList();
+    if (mode === 'collage') { syncDependent(); draw(); }
   }
   async function addImage(f) {
     try {
@@ -226,7 +231,15 @@
       const c = document.createElement('canvas');
       c.width = Math.max(1, Math.round(b.width * sc)); c.height = Math.max(1, Math.round(b.height * sc));
       c.getContext('2d').drawImage(b, 0, 0, c.width, c.height);
-      items.push({ id: uid(), kind: 'image', file, name: f.name, w: b.width, h: b.height, thumb: c.toDataURL('image/jpeg', 0.7), pos: null });
+      const item = { id: uid(), kind: 'image', file, name: f.name, w: b.width, h: b.height, thumb: c.toDataURL('image/jpeg', 0.7), pos: null };
+      if (mode === 'collage') {
+        const k = Math.min(1, 1400 / Math.max(b.width, b.height)), pc = document.createElement('canvas');
+        pc.width = Math.max(1, Math.round(b.width * k)); pc.height = Math.max(1, Math.round(b.height * k));
+        pc.getContext('2d').drawImage(b, 0, 0, pc.width, pc.height);
+        item.prev = pc; item.cl = newCl(); item.z = items.reduce((m, x) => Math.max(m, x.z || 0), 0) + 1;
+        if (S.collage.free) item.box = { x: 0.3, y: 0.3, w: 0.4, h: 0.4 };
+      }
+      items.push(item);
       b.close();
     } catch { logMsg(`無法讀取：${f.name}${Media.isHeic(f) ? '（HEIC 轉換失敗）' : ''}`, true); }
   }
@@ -276,7 +289,7 @@
 
   // ---------- PDF 清單 ----------
   const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-  const MODE_NAME = { image: '圖片', video: '影片', pdf: 'PDF' };
+  const MODE_NAME = { image: '圖片', video: '影片', pdf: 'PDF', collage: '拼接' };
   async function addPdfDoc(f) {
     $('#count').textContent = `讀取：${f.name} …`;
     try {
@@ -324,6 +337,7 @@
 
   function updateList() {
     if (mode === 'pdf') return updatePdfList();
+    if (mode === 'collage') return updateCollageList();
     const n = E().specs.length;
     $('#count').textContent = items.length ? `共 ${items.length} 個檔案 × ${n} 種規格 = ${items.length * n} 個輸出` : '尚未加入檔案';
     $('#list').innerHTML = items.map((it, i) =>
@@ -332,6 +346,7 @@
   }
 
   async function select(i) {
+    if (mode === 'collage') { cur = i >= 0 && i < items.length ? i : -1; selToken++; updateList(); syncDependent(); draw(); return; }
     if (i < 0 || i >= items.length) { cur = -1; selToken++; Media.closePreview(); bmp && bmp.close(); bmp = null; $('#seekWrap').hidden = true; draw(); updateList(); return; }
     cur = i;
     const tk = ++selToken, it = items[i];
@@ -369,6 +384,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     updateInfo();
+    if (mode === 'collage') return drawCollage(w, h);
     if (!bmp) return;
     const pad = 12, s = Math.min((w - pad * 2) / bmp.width, (h - pad * 2) / bmp.height);
     G = { s, ox: (w - bmp.width * s) / 2, oy: (h - bmp.height * s) / 2 };
@@ -416,6 +432,7 @@
   }
   function updateInfo() {
     updateNav();
+    if (mode === 'collage') { $('#info').textContent = collageInfoText(); return; }
     if (!bmp) { $('#info').textContent = ''; return; }
     if (mode === 'pdf') {
       const d = curItem(), pg = d.pages[Math.min(d.curPage || 0, d.pages.length - 1)], dm = Pdf.pageDims(pg);
@@ -433,6 +450,7 @@
   function scheduleEstimate() {
     clearTimeout(estTimer);
     estTimer = setTimeout(async () => {
+      if (mode === 'collage') { $('#estimate').textContent = items.length ? collageInfoText() : ''; return; }
       if (!bmp) { $('#estimate').textContent = ''; return; }
       const tk = ++estTok, it = curItem(), e = E(), res = [];
       if (mode === 'pdf') {
@@ -571,7 +589,7 @@
   const padN = (n, p) => String(n).padStart(p, '0');
   function updateNameExample() {
     const it = curItem() || { name: 'photo.jpg' }, e = E(), key = e.specs[0] || 'orig', spec = specFor(key, S);
-    const ext = mode === 'pdf' ? (S.pdf.out === 'images' ? S.pdf.imgFmt : 'pdf') : mode === 'video' ? (['mov', 'webm', 'avi'].includes(S.out.vfmt) ? S.out.vfmt : 'mp4') : EXT[mimeFor(e, it.file)];
+    const ext = mode === 'collage' ? (e.out.fmt === 'orig' ? (S.collage.transparent ? 'png' : 'jpg') : EXT[mimeFor(e, null)]) : mode === 'pdf' ? (S.pdf.out === 'images' ? S.pdf.imgFmt : 'pdf') : mode === 'video' ? (['mov', 'webm', 'avi'].includes(S.out.vfmt) ? S.out.vfmt : 'mp4') : EXT[mimeFor(e, it.file)];
     const nm = makeBase(S.out.tpl, { name: it.name.replace(/\.[^.]+$/, ''), ratio: spec.suffix, w: 1080, h: 1350, n: S.out.seqStart, i: 1, p: 1, pages: '1-3' });
     $('#nameEx').textContent = `範例：${nm}.${ext}`;
   }
@@ -647,6 +665,7 @@
   async function run() {
     if (running) return;
     if (mode === 'pdf') return runPdf();
+    if (mode === 'collage') return runCollage();
     const e = E();
     if (!items.length) { alert('請先加入檔案'); return; }
     if (!e.specs.length) { alert('請至少勾選一種裁切規格，或關閉「比例裁切」'); return; }
@@ -997,9 +1016,9 @@
     cur = -1;
     $$('#modeTabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === m));
     $$('[data-only]').forEach(el => el.hidden = !el.dataset.only.split(' ').includes(m));
-    $('#fileInput').accept = m === 'video' ? 'video/*,.mkv,.mov' : m === 'pdf' ? 'application/pdf,.pdf,image/*,.heic,.heif' : 'image/*,.heic,.heif';
-    $('#dropTitle').textContent = { image: '拖曳圖片或資料夾到這裡', video: '拖曳影片或資料夾到這裡', pdf: '拖曳 PDF（或圖片）到這裡' }[m];
-    $('#btnAddFiles').textContent = { image: '加入圖片', video: '加入影片', pdf: '加入 PDF' }[m];
+    $('#fileInput').accept = m === 'video' ? 'video/*,.mkv,.mov' : m === 'pdf' ? 'application/pdf,.pdf,image/*,.heic,.heif' : 'image/*,.heic,.heif';   // 圖片／拼接
+    $('#dropTitle').textContent = { image: '拖曳圖片或資料夾到這裡', video: '拖曳影片或資料夾到這裡', pdf: '拖曳 PDF（或圖片）到這裡', collage: '拖曳要拼接的照片到這裡（最多 10 張）' }[m];
+    $('#btnAddFiles').textContent = { image: '加入圖片', video: '加入影片', pdf: '加入 PDF', collage: '加入照片' }[m];
     $('#btnPrev').title = $('#navPrev').title = m === 'pdf' ? '上一頁（←）' : '上一個檔案（←）'; $('#btnNext').title = $('#navNext').title = m === 'pdf' ? '下一頁（→）' : '下一個檔案（→）';
     $('#log').innerHTML = ''; $('#log').hidden = true;
     hiddenKeys.clear();
@@ -1008,9 +1027,326 @@
     updateList();
   }
   function initMode() {
-    let m = 'image'; try { const sv = localStorage.getItem('imgtool.mode'); m = ['video', 'pdf'].includes(sv) ? sv : 'image'; } catch { }
+    let m = 'image'; try { const sv = localStorage.getItem('imgtool.mode'); m = ['video', 'pdf', 'collage'].includes(sv) ? sv : 'image'; } catch { }
     $('#modeTabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) setMode(b.dataset.tab); });
     return setMode(m, true);
+  }
+
+  // ---------- 拼接（拼貼／長圖）----------
+  const SCfg = () => S.collage;
+  let cTarget = 'box';              // 自由排版時，預覽中拖曳的對象：'box'＝移動/縮放框、'photo'＝調整照片取景
+  let cdrag = null, CV = null;      // CV：目前預覽的幾何 {geom, f, guides}
+  const ratioOfKey = k => (k === 'custom' ? S.custom.w / S.custom.h : (RATIOS.find(r => r.key === k) || { r: 1 }).r) || 1;
+  const cWidth = () => clamp(+SCfg().width || 1080, 200, 8000);
+  const cCanvasSize = () => { const W = cWidth(); return { W, H: Math.max(1, Math.round(W / ratioOfKey(SCfg().ratio))) }; };
+  const rotated = it => it.cl.rot % 180 !== 0;
+  const aspOf = it => (rotated(it) ? it.h / it.w : it.w / it.h);
+  const newCl = () => ({ fit: 'cover', zoom: 1, px: 0.5, py: 0.5, rot: 0 });
+  function orientedPrev(it) {
+    const rot = it.cl.rot;
+    if (!rot) return it.prev;
+    if (it._po && it._po.rot === rot) return it._po.cv;
+    const p = it.prev, sw = rot % 180 ? p.height : p.width, sh = rot % 180 ? p.width : p.height;
+    const c = document.createElement('canvas'); c.width = sw; c.height = sh;
+    const x = c.getContext('2d'); x.translate(sw / 2, sh / 2); x.rotate(rot * Math.PI / 180); x.drawImage(p, -p.width / 2, -p.height / 2);
+    it._po = { rot, cv: c };
+    return c;
+  }
+  function cGridGeom(W, H) {
+    const Sc = SCfg(), k = W / 1080, gap = Sc.gap * k, margin = Sc.margin * k, radius = Sc.radius * k, n = items.length;
+    let rects;
+    if (Sc.free) rects = items.map(it => (it.box ? { x: it.box.x * W, y: it.box.y * H, w: it.box.w * W, h: it.box.h * H } : { x: W * 0.3, y: H * 0.3, w: W * 0.4, h: H * 0.4 }));
+    else {
+      const t = Collage.templatesFor(n, items.map(aspOf), W / H), tpl = t[Math.min(Sc.tpl, t.length - 1)];
+      rects = Collage.layout(tpl.tree, { x: margin, y: margin, w: Math.max(1, W - 2 * margin), h: Math.max(1, H - 2 * margin) }, gap, n);
+    }
+    const order = items.map((_, i) => i);
+    if (Sc.free) order.sort((a, b) => (items[a].z || 0) - (items[b].z || 0));
+    return { W, H, rects, order, radius, k };
+  }
+  function cLongGeom() {
+    const Sc = SCfg(), v = Sc.long.dir !== 'h', size = clamp(+Sc.long.size || 1080, 200, 8000), k = size / 1080;
+    const gap = Sc.gap * k, m = Sc.margin * k, radius = Sc.radius * k, inner = Math.max(1, size - 2 * m), rects = [];
+    let pos = m;
+    items.forEach(it => {
+      const a = aspOf(it);
+      if (v) { const h = inner / a; rects.push({ x: m, y: pos, w: inner, h }); pos += h + gap; }
+      else { const w = inner * a; rects.push({ x: pos, y: m, w, h: inner }); pos += w + gap; }
+    });
+    const total = pos - gap + m;
+    return { W: v ? size : total, H: v ? total : size, rects, order: items.map((_, i) => i), radius, k };
+  }
+  const cGeom = () => (SCfg().kind === 'long' ? cLongGeom() : (() => { const s = cCanvasSize(); return cGridGeom(s.W, s.H); })());
+  function ensureBoxes() {
+    const Sc = SCfg(), { W, H } = cCanvasSize(), was = Sc.free;
+    Sc.free = false; const g = cGridGeom(W, H); Sc.free = was;
+    items.forEach((it, i) => { const r = g.rects[i]; it.box = { x: r.x / W, y: r.y / H, w: r.w / W, h: r.h / H }; it.z = i; });
+  }
+
+  function drawCollage(w, h) {
+    if (!items.length) { CV = null; return; }
+    const Sc = SCfg(), geom = cGeom(), f = Math.min(1, 1400 / Math.max(geom.W, geom.H));
+    const off = document.createElement('canvas');
+    off.width = Math.max(1, Math.round(geom.W * f)); off.height = Math.max(1, Math.round(geom.H * f));
+    const o = off.getContext('2d'); o.scale(f, f);
+    const long = Sc.kind === 'long';
+    Collage.drawPreview(o, geom, long ? items.map(() => ({ cl: { fit: 'cover', zoom: 1, px: 0.5, py: 0.5 } })) : items, i => orientedPrev(items[i]), Sc.transparent ? null : Sc.bg);
+    const wi = curWmImg();
+    if (wi) drawWm(o, geom.W, geom.H, S.wm, wi);
+    const pad = 12, s = Math.min((w - pad * 2) / off.width, (h - pad * 2) / off.height);
+    G = { s, ox: (w - off.width * s) / 2, oy: (h - off.height * s) / 2 };
+    const old = CV; CV = { geom, f, guides: (old && old.guides) || [] };
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(off, G.ox, G.oy, off.width * s, off.height * s);
+    const X = v => G.ox + v * f * s, Y = v => G.oy + v * f * s;
+    ctx.strokeStyle = 'rgba(128,128,128,.7)'; ctx.lineWidth = 1; ctx.strokeRect(G.ox, G.oy, off.width * s, off.height * s);
+    // 照片編號
+    ctx.font = '12px system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    geom.order.forEach(i => {
+      const r = geom.rects[i], cx = X(r.x) + 11, cy = Y(r.y) + 11;
+      ctx.fillStyle = i === cur ? '#2f6bff' : 'rgba(0,0,0,.55)'; ctx.beginPath(); ctx.arc(cx, cy, 9, 0, 7); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.fillText(String(i + 1), cx, cy + 0.5);
+    });
+    ctx.textAlign = 'start';
+    if (cur >= 0 && geom.rects[cur]) {
+      const r = geom.rects[cur];
+      ctx.strokeStyle = '#2f6bff'; ctx.lineWidth = 2; ctx.strokeRect(X(r.x), Y(r.y), r.w * f * s, r.h * f * s);
+      if (!long && Sc.free && cTarget === 'box') {
+        ctx.fillStyle = '#fff';
+        for (const [hx, hy] of [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]]) { ctx.fillRect(X(hx) - 5, Y(hy) - 5, 10, 10); ctx.strokeRect(X(hx) - 5, Y(hy) - 5, 10, 10); }
+      }
+    }
+    // 吸附參考線、長圖切割線
+    ctx.strokeStyle = '#ff3b81'; ctx.lineWidth = 1;
+    for (const g of CV.guides) { ctx.beginPath(); if (g.x !== undefined) { ctx.moveTo(X(g.x), G.oy); ctx.lineTo(X(g.x), G.oy + off.height * s); } else { ctx.moveTo(G.ox, Y(g.y)); ctx.lineTo(G.ox + off.width * s, Y(g.y)); } ctx.stroke(); }
+    if (long && Sc.long.slice) {
+      const v = Sc.long.dir !== 'h', r = ratioOfKey(Sc.long.sliceRatio), sl = v ? geom.W / r : geom.H * r, total = v ? geom.H : geom.W;
+      ctx.setLineDash([6, 4]); ctx.strokeStyle = '#ff3b81';
+      for (let t = sl; t < total - 1; t += sl) { ctx.beginPath(); if (v) { ctx.moveTo(G.ox, Y(t)); ctx.lineTo(G.ox + off.width * s, Y(t)); } else { ctx.moveTo(X(t), G.oy); ctx.lineTo(X(t), G.oy + off.height * s); } ctx.stroke(); }
+      ctx.setLineDash([]);
+    }
+  }
+  function collageInfoText() {
+    const Sc = SCfg();
+    if (!items.length) return '';
+    const g = cGeom();
+    return Sc.kind === 'long' ? `長圖 ${Math.round(g.W)}×${Math.round(g.H)} px · ${items.length} 張${Sc.long.slice ? ` · 將切成 ${Math.max(1, Math.ceil((Sc.long.dir !== 'h' ? g.H / (g.W / ratioOfKey(Sc.long.sliceRatio)) : g.W / (g.H * ratioOfKey(Sc.long.sliceRatio)))))} 張` : ''}`
+      : `畫布 ${Math.round(g.W)}×${Math.round(g.H)} px · ${items.length} 張照片${Sc.free ? ' · 自由排版' : ''}`;
+  }
+
+  // ----- 預覽互動 -----
+  const cPt = e => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left - G.ox) / G.s / CV.f, y: (e.clientY - r.top - G.oy) / G.s / CV.f }; };
+  function cHit(pt) {
+    if (!CV) return null;
+    const { geom } = CV, Sc = SCfg(), wi = curWmImg();
+    if (wi) { const p = wmPlacement(geom.W, geom.H, S.wm, wi); if (Math.abs(pt.x - p.cx) <= p.w / 2 && Math.abs(pt.y - p.cy) <= p.h / 2) return { type: 'wm', ox: pt.x - p.cx, oy: pt.y - p.cy }; }
+    if (Sc.kind === 'grid' && Sc.free && cTarget === 'box' && cur >= 0 && geom.rects[cur]) {
+      const r = geom.rects[cur], hr = 10 / (G.s * CV.f);
+      for (const [cx, cy, dx, dy] of [[r.x, r.y, -1, -1], [r.x + r.w, r.y, 1, -1], [r.x, r.y + r.h, -1, 1], [r.x + r.w, r.y + r.h, 1, 1]])
+        if (Math.abs(pt.x - cx) <= hr && Math.abs(pt.y - cy) <= hr) return { type: 'resize', i: cur, ax: dx > 0 ? r.x : r.x + r.w, ay: dy > 0 ? r.y : r.y + r.h, dx, dy };
+    }
+    for (let k = geom.order.length - 1; k >= 0; k--) { const i = geom.order[k], r = geom.rects[i]; if (pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h) return { type: 'photo', i }; }
+    return null;
+  }
+  const snapDelta = (vals, cands, thr) => { let best = 0, bd = thr + 1e-9; for (const v of vals) for (const c of cands) { const d = c - v; if (Math.abs(d) < bd) { bd = Math.abs(d); best = d; } } return bd <= thr ? best : 0; };
+  function snapCands(i, W, H) {
+    const xs = [0, W / 2, W], ys = [0, H / 2, H];
+    CV.geom.rects.forEach((r, j) => { if (j !== i) { xs.push(r.x, r.x + r.w / 2, r.x + r.w); ys.push(r.y, r.y + r.h / 2, r.y + r.h); } });
+    return { xs, ys };
+  }
+  cv.addEventListener('pointerdown', e => {
+    if (mode !== 'collage' || !CV) return;
+    const pt = cPt(e), h = cHit(pt);
+    if (!h) return;
+    if (h.type === 'photo' && h.i !== cur) { cur = h.i; updateList(); syncCollageUI(); draw(); }
+    cdrag = { ...h, sx: pt.x, sy: pt.y };
+    if (h.type === 'photo') {
+      const it = items[h.i], free = SCfg().kind === 'grid' && SCfg().free && cTarget === 'box';
+      cdrag.how = SCfg().kind === 'long' ? 'none' : free ? 'move' : 'pan';
+      cdrag.px0 = it.cl.px; cdrag.py0 = it.cl.py; cdrag.r0 = { ...CV.geom.rects[h.i] };
+    }
+    cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing';
+  });
+  cv.addEventListener('pointermove', e => {
+    if (mode !== 'collage' || !CV) return;
+    const pt = cPt(e);
+    if (!cdrag) {
+      const h = cHit(pt);
+      cv.style.cursor = !h ? '' : h.type === 'resize' ? (h.dx * h.dy > 0 ? 'nwse-resize' : 'nesw-resize') : 'grab';
+      return;
+    }
+    const { geom } = CV, W = geom.W, H = geom.H, dx = pt.x - cdrag.sx, dy = pt.y - cdrag.sy, thr = 7 / (G.s * CV.f);
+    if (cdrag.type === 'wm') { setWm({ custom: true, x: clamp((pt.x - cdrag.ox) / W, 0, 1), y: clamp((pt.y - cdrag.oy) / H, 0, 1) }); draw(); return; }
+    if (cdrag.type === 'photo' && cdrag.how === 'pan') {
+      const it = items[cdrag.i], src = orientedPrev(it), r = cdrag.r0, pl = Collage.place(r, src.width, src.height, it.cl);
+      if (Math.abs(r.w - pl.dw) > 0.5) it.cl.px = clamp(cdrag.px0 + dx / (r.w - pl.dw), 0, 1);
+      if (Math.abs(r.h - pl.dh) > 0.5) it.cl.py = clamp(cdrag.py0 + dy / (r.h - pl.dh), 0, 1);
+      draw();
+    } else if (cdrag.type === 'photo' && cdrag.how === 'move') {
+      const it = items[cdrag.i], r = cdrag.r0, c = snapCands(cdrag.i, W, H);
+      let x = r.x + dx, y = r.y + dy;
+      const sx = snapDelta([x, x + r.w / 2, x + r.w], c.xs, thr), sy = snapDelta([y, y + r.h / 2, y + r.h], c.ys, thr);
+      x += sx; y += sy;
+      x = clamp(x, -r.w + 20, W - 20); y = clamp(y, -r.h + 20, H - 20);
+      CV.guides = [];
+      if (sx) CV.guides.push({ x: [x, x + r.w / 2, x + r.w].find(v => c.xs.some(q => Math.abs(q - v) < 0.5)) });
+      if (sy) CV.guides.push({ y: [y, y + r.h / 2, y + r.h].find(v => c.ys.some(q => Math.abs(q - v) < 0.5)) });
+      it.box = { x: x / W, y: y / H, w: r.w / W, h: r.h / H };
+      draw();
+    } else if (cdrag.type === 'resize') {
+      const it = items[cdrag.i], r0 = geom.rects[cdrag.i], c = snapCands(cdrag.i, W, H);
+      let ex = pt.x, ey = pt.y;
+      ex += snapDelta([ex], c.xs, thr); ey += snapDelta([ey], c.ys, thr);
+      let x = Math.min(cdrag.ax, ex), y = Math.min(cdrag.ay, ey), w2 = Math.max(8, Math.abs(ex - cdrag.ax)), h2 = Math.max(8, Math.abs(ey - cdrag.ay));
+      if (e.shiftKey) { const a = r0.w / r0.h; if (w2 / h2 > a) w2 = h2 * a; else h2 = w2 / a; x = cdrag.dx > 0 ? cdrag.ax : cdrag.ax - w2; y = cdrag.dy > 0 ? cdrag.ay : cdrag.ay - h2; }
+      CV.guides = [];
+      it.box = { x: x / W, y: y / H, w: w2 / W, h: h2 / H };
+      draw();
+    }
+  });
+  const cEnd = () => { if (!cdrag) return; cdrag = null; if (CV) CV.guides = []; cv.style.cursor = ''; save(); syncCollageUI(); draw(); };
+  cv.addEventListener('pointerup', cEnd);
+  cv.addEventListener('pointercancel', cEnd);
+  cv.addEventListener('wheel', e => {
+    if (mode !== 'collage' || !CV || SCfg().kind !== 'grid') return;
+    const h = cHit(cPt(e)), i = h && h.type === 'photo' ? h.i : cur;
+    if (i < 0 || !items[i]) return;
+    e.preventDefault();
+    const cl = items[i].cl;
+    cl.zoom = clamp((cl.zoom || 1) * (e.deltaY < 0 ? 1.06 : 1 / 1.06), cl.fit === 'contain' ? 0.2 : 1, 4);
+    if (i !== cur) { cur = i; updateList(); }
+    syncCollageUI(); draw();
+  }, { passive: false });
+  document.addEventListener('keydown', e => {
+    if (mode !== 'collage' || !CV || cur < 0 || !items[cur]) return;
+    if (e.target.closest && e.target.closest('input,select,textarea')) return;
+    const Sc = SCfg();
+    if (!(Sc.kind === 'grid' && Sc.free && cTarget === 'box')) return;
+    const d = e.shiftKey ? 10 : 1;
+    const dx = e.key === 'ArrowLeft' ? -d : e.key === 'ArrowRight' ? d : 0, dy = e.key === 'ArrowUp' ? -d : e.key === 'ArrowDown' ? d : 0;
+    if (!dx && !dy) return;
+    e.preventDefault();
+    const it = items[cur], { W, H } = CV.geom;
+    if (!it.box) ensureBoxes();
+    it.box.x += dx / W; it.box.y += dy / H; draw();
+  });
+
+  // ----- 右側設定面板 -----
+  function renderTplGallery() {
+    const box = $('#tplGallery'), Sc = SCfg();
+    if (mode !== 'collage' || Sc.free || Sc.kind !== 'grid') return;
+    const n = items.length;
+    if (!n) { box.innerHTML = '<small class="muted">請先加入照片</small>'; return; }
+    const ratio = ratioOfKey(Sc.ratio), tpls = Collage.templatesFor(n, items.map(aspOf), ratio);
+    box.innerHTML = '';
+    tpls.forEach((t, i) => {
+      const b = document.createElement('button');
+      b.className = 'tpl' + (i === Math.min(Sc.tpl, tpls.length - 1) ? ' on' : ''); b.title = t.name;
+      const c = document.createElement('canvas'); c.width = 60; c.height = Math.max(24, Math.min(90, Math.round(60 / ratio)));
+      const x = c.getContext('2d');
+      Collage.layout(t.tree, { x: 2, y: 2, w: c.width - 4, h: c.height - 4 }, 2, n).forEach((r, k) => {
+        x.fillStyle = '#7a8cff'; x.fillRect(r.x, r.y, r.w, r.h); x.fillStyle = '#fff'; x.font = '9px sans-serif'; x.fillText(String(k + 1), r.x + 2, r.y + 10);
+      });
+      b.appendChild(c);
+      const sp = document.createElement('span'); sp.textContent = t.name; b.appendChild(sp);
+      b.addEventListener('click', () => { Sc.tpl = i; changed(); });
+      box.appendChild(b);
+    });
+  }
+  function syncCollageUI() {
+    const Sc = SCfg();
+    $$('[data-ck]').forEach(el => { const ok = !el.dataset.only || el.dataset.only.split(' ').includes(mode); el.hidden = !ok || el.dataset.ck !== Sc.kind; });
+    $$('[data-ckind]').forEach(b => b.classList.toggle('on', b.dataset.ckind === Sc.kind));
+    $$('[data-cfree]').forEach(el => el.hidden = (el.dataset.cfree === 'yes') !== !!Sc.free);
+    $$('[data-cratio]').forEach(el => el.hidden = Sc.ratio !== 'custom');
+    $$('[data-ctarget]').forEach(b => b.classList.toggle('on', b.dataset.ctarget === cTarget));
+    $('#longSizeLabel').textContent = Sc.long.dir === 'h' ? '高度' : '寬度';
+    const { W, H } = cCanvasSize(); $('#cSizeNote').textContent = `→ ${W}×${H} px`;
+    const it = mode === 'collage' ? curItem() : null;
+    $('#clNone').hidden = !!it; $('#clBox').hidden = !it; $('#clNo').hidden = !it;
+    if (it) {
+      $('#clNo').textContent = `第 ${cur + 1} 張`;
+      $('#clFit').value = it.cl.fit;
+      const z = $('#clZoom'); z.min = it.cl.fit === 'contain' ? 0.2 : 1; z.value = it.cl.zoom;
+      $('#clZoomV').textContent = (+it.cl.zoom).toFixed(2) + '×';
+    }
+    if (mode === 'collage') renderTplGallery();
+  }
+  function wireCollage() {
+    $$('[data-ckind]').forEach(b => b.addEventListener('click', () => { SCfg().kind = b.dataset.ckind; changed(); }));
+    $$('[data-ctarget]').forEach(b => b.addEventListener('click', () => { cTarget = b.dataset.ctarget; syncCollageUI(); draw(); }));
+    const on = (id, ev, fn) => $(id).addEventListener(ev, () => { const it = curItem(); if (mode === 'collage' && it) fn(it); });
+    on('#clFit', 'change', it => { it.cl.fit = $('#clFit').value; if (it.cl.fit === 'cover') it.cl.zoom = Math.max(1, it.cl.zoom); syncCollageUI(); draw(); });
+    on('#clZoom', 'input', it => { it.cl.zoom = +$('#clZoom').value; $('#clZoomV').textContent = it.cl.zoom.toFixed(2) + '×'; draw(); });
+    const rot = d => it => { it.cl.rot = (it.cl.rot + d + 360) % 360; it._po = null; changed(); };
+    on('#clRotL', 'click', rot(-90)); on('#clRotR', 'click', rot(90));
+    on('#clReset', 'click', it => { it.cl = { ...it.cl, zoom: 1, px: 0.5, py: 0.5 }; syncCollageUI(); draw(); });
+    const zs = () => items.map(i => i.z || 0);
+    on('#clFront', 'click', it => { it.z = Math.max(...zs()) + 1; draw(); });
+    on('#clBack', 'click', it => { it.z = Math.min(...zs()) - 1; draw(); });
+    const step = d => it => { const ord = items.map((x, i) => i).sort((a, b) => (items[a].z || 0) - (items[b].z || 0)), k = ord.indexOf(cur), j = k + d; if (j < 0 || j >= ord.length) return; const o = items[ord[j]]; const t = it.z; it.z = o.z; o.z = t; if (it.z === o.z) it.z += d; draw(); };
+    on('#clUp', 'click', step(1)); on('#clDown', 'click', step(-1));
+    $('#btnTplReset').addEventListener('click', () => { SCfg().free = false; syncUI(); changed(); });
+    // 左側清單拖曳排序
+    let dragRow = -1;
+    $('#list').addEventListener('dragstart', e => { const it = e.target.closest && e.target.closest('.item'); if (mode !== 'collage' || !it) return; dragRow = +it.dataset.i; e.dataTransfer.setData('text/plain', 'row'); e.dataTransfer.effectAllowed = 'move'; });
+    $('#list').addEventListener('dragover', e => { const it = e.target.closest && e.target.closest('.item'); if (mode !== 'collage' || dragRow < 0 || !it) return; e.preventDefault(); $$('.item.dragover').forEach(x => x.classList.remove('dragover')); it.classList.add('dragover'); });
+    $('#list').addEventListener('drop', e => {
+      const it = e.target.closest && e.target.closest('.item');
+      if (mode !== 'collage' || dragRow < 0 || !it) { dragRow = -1; return; }
+      e.preventDefault(); e.stopPropagation();
+      const from = dragRow, to = +it.dataset.i; dragRow = -1;
+      if (from === to) return;
+      const curIt = items[cur], [mv] = items.splice(from, 1); items.splice(to, 0, mv);
+      cur = items.indexOf(curIt); updateList(); changed();
+    });
+    $('#list').addEventListener('dragend', () => { dragRow = -1; $$('.item.dragover').forEach(x => x.classList.remove('dragover')); });
+  }
+  function updateCollageList() {
+    $('#count').textContent = items.length ? `共 ${items.length} / ${Collage.MAX} 張照片（拖曳可調整順序）` : '尚未加入照片';
+    $('#list').innerHTML = items.map((it, i) =>
+      `<div class="item ${i === cur ? 'sel' : ''}" data-i="${i}" draggable="true"><span class="cno">${i + 1}</span><img src="${it.thumb}"><div class="meta"><div class="nm" title="${it.name}">${it.name}</div><small>${it.w}×${it.h}${it.cl && it.cl.rot ? ` · 旋轉 ${it.cl.rot}°` : ''}</small></div><button class="x" data-x="${i}" title="移除">✕</button></div>`).join('');
+    $('#empty').hidden = items.length > 0;
+  }
+
+  async function runCollage() {
+    const Sc = SCfg();
+    if (!items.length) { alert('請先加入照片'); return; }
+    if (S.wm.on && !curWmImg()) { alert('已啟用浮水印，但尚未選擇浮水印圖片或輸入文字'); return; }
+    const sink = await openSink(); if (!sink) return;
+    startRun();
+    const e = E(), wmImg = curWmImg();
+    let saved = 0, skipped = 0, over = 0, fail = 0, fatal = false, where = '';
+    try {
+      const wantMime = e.out.fmt === 'orig' ? (Sc.transparent ? 'image/png' : 'image/jpeg') : mimeFor(e, null);
+      const bgColor = (Sc.transparent && wantMime !== 'image/jpeg') ? null : Sc.bg;
+      let canvases;
+      if (Sc.kind === 'grid') {
+        const { W, H } = cCanvasSize();
+        canvases = [await Collage.renderGrid(items, cGridGeom(W, H), bgColor, p => setProgress(p * 0.8, `排版 ${Math.round(p * 100)}%`))];
+      } else {
+        const cvs = await Collage.renderLong(items, cLongGeom(), bgColor, p => setProgress(p * 0.8, `拼接 ${Math.round(p * 100)}%`));
+        canvases = Sc.long.slice ? Collage.sliceCanvas(cvs, ratioOfKey(Sc.long.sliceRatio), Sc.long.dir !== 'h', bgColor) : [cvs];
+      }
+      let seq = S.out.seqStart;
+      for (let k = 0; k < canvases.length; k++) {
+        if (cancelled) break;
+        const c = canvases[k];
+        if (S.wm.on && wmImg) drawWm(c.getContext('2d'), c.width, c.height, S.wm, wmImg);
+        const r = await encodeCanvas(c, wantMime, e);
+        if (r.over) over++;
+        const ratioTag = Sc.kind === 'grid' ? specFor(Sc.ratio, S).suffix : (Sc.long.slice ? specFor(Sc.long.sliceRatio, S).suffix : 'long');
+        let base = makeBase(S.out.tpl, { name: Sc.kind === 'grid' ? '拼貼' : '長圖', ratio: ratioTag, w: c.width, h: c.height, n: seq++, i: k + 1 });
+        if (canvases.length > 1 && !/\{(n|i)(:\d+)?\}/.test(S.out.tpl)) base += `_${padN(k + 1, 2)}`;
+        if (await sink.save(base, EXT[wantMime], r.blob) === 'skipped') skipped++; else saved++;
+        setProgress(0.8 + 0.2 * (k + 1) / canvases.length, `輸出 ${k + 1} / ${canvases.length}`);
+      }
+    } catch (err) {
+      if (err.fatal) { logMsg(err.message, true); fatal = true; } else if (!cancelled) { fail++; logMsg(`失敗：${err.message || err}`, true); }
+    }
+    where = await sink.finish();
+    logMsg(`${fatal ? '已中止' : cancelled ? '已取消' : '完成'}：輸出 ${saved} 個${skipped ? `，略過 ${skipped}` : ''}${fail ? '，失敗' : ''}${over ? `，${over} 個仍超過大小上限` : ''}${where}`, fail > 0 || fatal);
+    finishRun();
   }
 
   // ---------- 介面主題 ----------
@@ -1029,7 +1365,7 @@
   (async function init() {
     initTheme(); initCollapse(); initResize();
     if (!Media.videoSupported()) { const n = $('#vidNote'); n.classList.add('bad'); n.innerHTML += '<br>⚠ 目前的瀏覽器不支援影片處理，只能處理圖片。請改用 Chrome 或 Edge 電腦版。'; }
-    buildGrid(); bindSettings(); wire();
+    buildGrid(); bindSettings(); wire(); wireCollage();
     await loadWmLib();
     try { dirHandle = await DB.kvGet('outDir'); } catch { }
     showDir(); renderPresets(); syncUI(); await initMode(); updateList(); draw();

@@ -18,6 +18,7 @@ const DEFAULTS = {
   wm: { on: false, src: 'image', text: '', color: '#777777', id: null, anchor: 8, custom: false, margin: 3, x: 0.9, y: 0.9, size: 20, opacity: 80, rot: 0 },
   resize: { on: false, mode: 'long', long: 1920, width: 1080, height: 1080, percent: 50, exactW: 1080, exactH: 1350, noUp: true },
   pdf: { on: true, mode: 'smart', dpi: 150, quality: 75, targetMB: 0, gray: false, resOn: false, resMode: 'percent', resPercent: 100, resLong: 297, out: 'pdf', imgFmt: 'jpg', imgDpi: 150, merge: false, split: 0, pnOn: false, pnPos: 'bc', pnSize: 10, pnFmt: '{n} / {N}', pnStart: 1 },
+  collage: { kind: 'grid', ratio: '4:5', width: 1080, bg: '#ffffff', transparent: false, tpl: 0, free: false, gap: 12, margin: 24, radius: 16, long: { dir: 'v', size: 1080, slice: false, sliceRatio: '4:5' } },
   out: { on: true, fmt: 'orig', von: true, vfmt: 'mp4', vquality: 70, vtargetKB: 0, fps: 0, quality: 90, targetKB: 0, bg: '#ffffff', tpl: '{name}_{ratio}', seqStart: 1, seqPad: 3, conflict: 'rename' },
 };
 

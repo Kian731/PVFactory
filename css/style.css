@@ -152,3 +152,10 @@ body.resizing{user-select:none;cursor:col-resize}
 .seg button.on{background:var(--accent);color:#fff}
 .item .rs{flex:none;margin:0 2px 0 0}
 .item.msel{background:rgba(47,107,255,.14)}
+
+#tplGallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(62px,1fr));gap:6px;margin-bottom:6px}
+.tpl{border:2px solid var(--line);border-radius:6px;padding:3px;background:var(--bg);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:var(--muted)}
+.tpl canvas{width:100%;height:auto;border-radius:3px;background:rgba(128,128,128,.2)}
+.tpl.on{border-color:var(--accent);color:var(--text)}
+.item .cno{flex:none;width:18px;height:18px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center}
+.item.dragover{outline:2px dashed var(--accent)}

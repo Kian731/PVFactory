@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>圖影工坊｜圖片＋影片批次處理</title>
 <script>try{var t=localStorage.getItem('imgtool.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=mvexpo8y">
 </head>
 <body>
 <header>
   <h1>圖影工坊</h1>
   <span class="sub">裁切 · 浮水印 · 縮放壓縮 · 轉格式（檔案只在你的電腦處理，不會上傳）</span>
-  <nav id="modeTabs"><button data-tab="image">🖼 圖片</button><button data-tab="video">🎞 影片</button><button data-tab="pdf">📄 PDF</button></nav>
+  <nav id="modeTabs"><button data-tab="image">🖼 圖片</button><button data-tab="video">🎞 影片</button><button data-tab="pdf">📄 PDF</button><button data-tab="collage">🧩 拼接</button></nav>
 </header>
 
 <main>
@@ -22,6 +22,9 @@
     <div id="dropzone">
       <b id="dropTitle">拖曳圖片或資料夾到這裡</b>
       <small>或點擊選擇檔案</small>
+    </div>
+    <div class="notice" data-only="collage">
+      最多 10 張照片，排進一張畫布（或接成長圖）。清單順序＝排版順序，可拖曳調整；直式、橫式可混用。
     </div>
     <div class="notice" data-only="image">
       支援：JPG / PNG / WebP / GIF / BMP / HEIC（iPhone 照片會自動轉換）
@@ -62,13 +65,13 @@
   <!-- 中：預覽 -->
   <section id="center">
     <div class="toolbar">
-      <button id="btnPrev" class="ghost">◀</button>
-      <button id="btnNext" class="ghost">▶</button>
-      <span class="muted">顯示裁切框：</span>
-      <div id="chips"></div>
+      <button id="btnPrev" class="ghost" data-only="image video pdf">◀</button>
+      <button id="btnNext" class="ghost" data-only="image video pdf">▶</button>
+      <span class="muted" data-only="image video pdf">顯示裁切框：</span><span class="muted" data-only="collage">點選照片後拖曳調整取景，滾輪縮放；自由排版可拖曳／縮放框</span>
+      <div id="chips" data-only="image video pdf"></div>
       <span class="grow"></span>
-      <button id="btnCenter" class="ghost">此張置中</button>
-      <button id="btnApplyAll" class="ghost" title="把這張目前的裁切位置設為預設，套用到所有圖片">位置套用全部</button>
+      <button id="btnCenter" class="ghost" data-only="image video pdf">此張置中</button>
+      <button id="btnApplyAll" class="ghost" data-only="image video pdf" title="把這張目前的裁切位置設為預設，套用到所有圖片">位置套用全部</button>
     </div>
     <div id="seekWrap" class="toolbar" hidden>
       <span class="muted">預覽時間：</span><input type="range" id="seek" min="0" max="1000" value="0" style="flex:1"><span id="seekT" class="muted"></span>
@@ -91,7 +94,111 @@
       </div>
     </section>
 
-    <section class="card" data-toggle="cropOn">
+        <section class="card" data-only="collage">
+      <header><h3>拼接方式</h3></header>
+      <div class="body">
+        <div class="seg"><button data-ckind="grid">拼貼（排進指定比例）</button><button data-ckind="long">長圖（首尾相接）</button></div>
+        <p class="hint" data-ck="grid">把最多 10 張照片排進一張指定比例的畫布。左側清單的順序就是排版順序，可拖曳調整；直式、橫式照片可混在一起。</p>
+        <p class="hint" data-ck="long">把照片上下（或左右）接成一張長圖，可再依比例切成多張（例如 IG 輪播）。</p>
+      </div>
+    </section>
+
+    <section class="card" data-only="collage" data-ck="grid">
+      <header><h3>畫布與背景</h3></header>
+      <div class="body">
+        <div class="field">比例
+          <select data-k="collage.ratio">
+            <option value="1:1">1:1（PMax 正方）</option>
+            <option value="4:5">4:5（PMax 直式、IG 貼文）</option>
+            <option value="2:3">2:3（直式相片）</option>
+            <option value="3:2">3:2（橫式相片）</option>
+            <option value="1.91:1">1.91:1（PMax 橫式）</option>
+            <option value="9:16">9:16（IG/FB 限動）</option>
+            <option value="custom">自訂比例</option>
+          </select>
+        </div>
+        <div class="field" data-cratio="custom">自訂
+          <input type="number" data-k="custom.w" min="0.1" step="any" style="width:70px"> :
+          <input type="number" data-k="custom.h" min="0.1" step="any" style="width:70px">
+        </div>
+        <div class="field">輸出寬度 <input type="number" data-k="collage.width" min="200" max="8000" style="width:90px"> px <small id="cSizeNote" class="muted"></small></div>
+        <div class="field">背景色 <input type="color" data-k="collage.bg">
+          <label class="chk" style="margin:0"><input type="checkbox" data-k="collage.transparent"> 透明（需 PNG／WebP）</label></div>
+      </div>
+    </section>
+
+    <section class="card" data-only="collage" data-ck="grid">
+      <header><h3>版面</h3></header>
+      <div class="body">
+        <label class="chk"><input type="checkbox" data-k="collage.free"> 自由排版（自己拖曳、縮放每張照片的框）</label>
+        <div data-cfree="no">
+          <div class="muted" style="margin:6px 0 4px">樣板</div>
+          <div id="tplGallery"></div>
+          <div class="field">間距 <input type="range" data-k="collage.gap" min="0" max="80"><span data-o="collage.gap"></span></div>
+          <div class="field">外框邊距 <input type="range" data-k="collage.margin" min="0" max="160"><span data-o="collage.margin"></span></div>
+        </div>
+        <div data-cfree="yes">
+          <p class="hint">拖曳照片框移動、拖四個角縮放（按住 Shift 維持比例），靠近畫布邊緣、中線或其他框會自動吸附；方向鍵微調（Shift＋方向鍵一次 10px）。</p>
+          <button id="btnTplReset" class="ghost">重設為樣板排版</button>
+        </div>
+        <div class="field">圖片圓角 <input type="range" data-k="collage.radius" min="0" max="240"><span data-o="collage.radius"></span></div>
+        <p class="hint">間距、邊距、圓角以 1080 寬為基準，輸出尺寸改變時會等比例縮放。</p>
+      </div>
+    </section>
+
+    <section class="card" data-only="collage" data-ck="long">
+      <header><h3>長圖設定</h3></header>
+      <div class="body">
+        <div class="field">方向
+          <select data-k="collage.long.dir"><option value="v">上下接（垂直）</option><option value="h">左右接（水平）</option></select>
+        </div>
+        <div class="field"><span id="longSizeLabel">寬度</span> <input type="number" data-k="collage.long.size" min="200" max="8000" style="width:90px"> px
+          <small class="muted">每張照片等比縮放到這個尺寸</small></div>
+        <div class="field">間距 <input type="range" data-k="collage.gap" min="0" max="80"><span data-o="collage.gap"></span></div>
+        <div class="field">外框邊距 <input type="range" data-k="collage.margin" min="0" max="160"><span data-o="collage.margin"></span></div>
+        <div class="field">圖片圓角 <input type="range" data-k="collage.radius" min="0" max="240"><span data-o="collage.radius"></span></div>
+        <div class="field">背景色 <input type="color" data-k="collage.bg">
+          <label class="chk" style="margin:0"><input type="checkbox" data-k="collage.transparent"> 透明（需 PNG／WebP）</label></div>
+        <label class="chk"><input type="checkbox" data-k="collage.long.slice"> 拼好後依比例切成多張（打包成 ZIP）</label>
+        <div class="field">切割比例
+          <select data-k="collage.long.sliceRatio">
+            <option value="4:5">4:5（IG 貼文）</option>
+            <option value="1:1">1:1</option>
+            <option value="2:3">2:3</option>
+            <option value="3:2">3:2</option>
+            <option value="1.91:1">1.91:1</option>
+            <option value="9:16">9:16（限動）</option>
+            <option value="custom">自訂比例</option>
+          </select>
+        </div>
+        <p class="hint">預覽中的紅色虛線是切割位置；最後一張不足的部分會補背景色。浮水印會壓在每一張切片上。</p>
+      </div>
+    </section>
+
+    <section class="card" data-only="collage">
+      <header><h3>選取的照片</h3><span id="clNo" class="badge" hidden></span></header>
+      <div class="body">
+        <div id="clNone" class="hint">先在左側清單或預覽中點選一張照片。</div>
+        <div id="clBox" hidden>
+          <div data-ck="grid">
+            <div class="field">顯示方式
+              <select id="clFit"><option value="cover">填滿（裁掉多出的部分）</option><option value="contain">完整顯示（不裁切，空白補背景）</option></select>
+            </div>
+            <div class="field">縮放 <input type="range" id="clZoom" min="1" max="4" step="0.02"><span id="clZoomV"></span></div>
+          </div>
+          <div class="row"><button id="clRotL">↺ 左轉 90°</button><button id="clRotR">↻ 右轉 90°</button><button id="clReset" class="ghost" data-ck="grid">還原取景</button></div>
+          <div data-ck="grid" data-cfree="yes">
+            <div class="field">拖曳對象
+              <div class="seg"><button data-ctarget="box">移動／縮放框</button><button data-ctarget="photo">調整取景</button></div>
+            </div>
+            <div class="row"><button id="clFront" class="ghost">置頂</button><button id="clUp" class="ghost">上移一層</button><button id="clDown" class="ghost">下移一層</button><button id="clBack" class="ghost">置底</button></div>
+          </div>
+          <p class="hint" data-ck="grid">在預覽中拖曳照片可調整取景，滾輪縮放（自由排版時需切到「調整取景」才能拖曳照片）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" data-only="image video pdf" data-toggle="cropOn">
       <header><h3>比例裁切</h3><label class="switch"><input type="checkbox" data-k="cropOn"><i></i></label></header>
       <div class="body">
         <div id="ratioList"></div>
@@ -159,7 +266,7 @@
       </div>
     </section>
 
-    <section class="card" data-only="image" data-toggle="out.on">
+    <section class="card" data-only="image collage" data-toggle="out.on">
       <header><h3>圖片壓縮與格式</h3><label class="switch"><input type="checkbox" data-k="out.on"><i></i></label></header>
       <div class="body">
         <div class="field">格式
@@ -326,11 +433,12 @@
 </footer>
 <div id="log" hidden></div>
 
-<script src="js/db.js"></script>
-<script src="js/zip.js"></script>
-<script src="js/core.js"></script>
-<script src="js/media.js"></script>
-<script src="js/pdf.js"></script>
-<script src="js/app.js"></script>
+<script src="js/db.js?v=mvexpo8y"></script>
+<script src="js/zip.js?v=mvexpo8y"></script>
+<script src="js/core.js?v=mvexpo8y"></script>
+<script src="js/media.js?v=mvexpo8y"></script>
+<script src="js/pdf.js?v=mvexpo8y"></script>
+<script src="js/collage.js?v=mvexpo8y"></script>
+<script src="js/app.js?v=mvexpo8y"></script>
 </body>
 </html>
