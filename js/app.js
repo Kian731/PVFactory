@@ -129,6 +129,7 @@
     }).join('');
     $$('#ratioList input').forEach(cb => cb.addEventListener('change', () => {
       S.specs = RATIOS.map(r => r.key).filter(k => $$('#ratioList input:checked').some(i => i.value === k));
+      renderRatioList();   // 重新繪製，才會立刻顯示／隱藏該列的 −／＋
       changed();
     }));
   }
