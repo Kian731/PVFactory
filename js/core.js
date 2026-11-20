@@ -14,7 +14,7 @@ const RATIOS = [
 const COLORS = { orig: '#ffffff', '1:1': '#ff5a5a', '2:3': '#ffb020', '3:2': '#35c46b', '1.91:1': '#29b6f6', '4:5': '#b06cff', '9:16': '#ff6fb5', custom: '#ffe14d' };
 
 const DEFAULTS = {
-  cropOn: true, specs: ['1:1'], custom: { w: 16, h: 9 }, pos: {},
+  cropOn: true, specs: ['1:1'], counts: {}, custom: { w: 16, h: 9 }, pos: {},
   wm: { on: false, src: 'image', text: '', color: '#777777', id: null, anchor: 8, custom: false, margin: 3, x: 0.9, y: 0.9, size: 20, opacity: 80, rot: 0 },
   resize: { on: false, mode: 'long', long: 1920, width: 1080, height: 1080, percent: 50, exactW: 1080, exactH: 1350, noUp: true },
   pdf: { on: true, mode: 'smart', dpi: 150, quality: 75, targetMB: 0, gray: false, resOn: false, resMode: 'percent', resPercent: 100, resLong: 297, out: 'pdf', imgFmt: 'jpg', imgDpi: 150, merge: false, split: 0, pnOn: false, pnPos: 'bc', pnSize: 10, pnFmt: '{n} / {N}', pnStart: 1 },
@@ -26,7 +26,7 @@ const DEFAULTS = {
 function prune(base, obj) {
   for (const k of Object.keys(obj)) {
     if (!(k in base)) delete obj[k];
-    else if (k !== 'pos' && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k]) && obj[k] && typeof obj[k] === 'object') prune(base[k], obj[k]);
+    else if (k !== 'pos' && k !== 'counts' && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k]) && obj[k] && typeof obj[k] === 'object') prune(base[k], obj[k]);
   }
   return obj;
 }
@@ -39,7 +39,7 @@ function effective(S, mode = 'image') {
   else out = o.on ? o : { ...o, fmt: 'orig', quality: 92, targetKB: 0 };
   return {
     ...S,
-    specs: S.cropOn ? S.specs : ['orig'],
+    specs: S.cropOn ? expandSpecs(S) : ['orig'],
     resize: S.resize.on ? S.resize : { ...S.resize, mode: 'none' },
     out,
   };
@@ -55,13 +55,23 @@ function deepMerge(base, over) {
   return out;
 }
 
+// 每個比例可有多個裁切框：第 1 個用原 key（如 '1:1'），第 2 個起為 '1:1#1'、'1:1#2'…
+const countOf = (S, base) => (base === 'orig' ? 1 : Math.max(1, Math.min(10, Math.round(+((S.counts || {})[base]) || 1))));
+function expandSpecs(S) {
+  return S.specs.flatMap(b => Array.from({ length: countOf(S, b) }, (_, i) => (i ? `${b}#${i}` : b)));
+}
 function specFor(key, S) {
-  if (key === 'custom') {
+  const [base, ix] = String(key).split('#'), idx = ix ? +ix : 0, n = countOf(S, base);
+  let sp;
+  if (base === 'custom') {
     const w = +S.custom.w || 1, h = +S.custom.h || 1;
-    return { key, ratio: w / h, suffix: `${w}x${h}`, label: `自訂 ${w}:${h}` };
+    sp = { ratio: w / h, suffix: `${w}x${h}`, label: `自訂 ${w}:${h}` };
+  } else {
+    const d = RATIOS.find(r => r.key === base) || RATIOS[0];
+    sp = { ratio: d.r, suffix: d.suffix || d.key.replace(':', 'x'), label: d.label };
   }
-  const d = RATIOS.find(r => r.key === key) || RATIOS[0];
-  return { key: d.key, ratio: d.r, suffix: d.suffix || d.key.replace(':', 'x'), label: d.label };
+  if (n > 1) { sp.suffix += `_${idx + 1}`; sp.label += ` #${idx + 1}`; }
+  return { key, base, idx, n, ...sp };
 }
 
 // 在原圖中取該比例的最大區域；px,py 為 0~1，表示在可移動範圍內的位置（0.5=置中）

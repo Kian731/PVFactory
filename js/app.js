@@ -27,7 +27,17 @@
   const setPath = (o, p, v) => { const ks = p.split('.'); const l = ks.pop(); ks.reduce((a, k) => a[k], o)[l] = v; };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-  const posOf = (it, key) => (it && it.pos && it.pos[key]) || S.pos[key] || { x: 0.5, y: 0.5, z: 1 };
+  // 預設位置：只有 1 個框時置中；同一比例有多個框時，沿可移動方向平均排開並縮小到不重疊
+  function defaultPos(key, it) {
+    const sp = specFor(key, S);
+    if (sp.n <= 1) return { x: 0.5, y: 0.5, z: 1 };
+    const f = sp.idx / (sp.n - 1), iw = it && it.w, ih = it && it.h, r = sp.ratio;
+    if (!iw || !ih || !r) return { x: f, y: f, z: 1 };
+    let w, h; if (iw / ih > r) { h = ih; w = ih * r; } else { w = iw; h = iw / r; }
+    const horiz = iw - w >= ih - h, L = horiz ? iw : ih, sz = horiz ? w : h, z = clamp(L / (sp.n * sz), 0.05, 1);
+    return horiz ? { x: f, y: 0.5, z } : { x: 0.5, y: f, z };
+  }
+  const posOf = (it, key) => (it && it.pos && it.pos[key]) || S.pos[key] || defaultPos(key, it);
   const curItem = () => items[cur];
   let textWm = { key: '', cv: null };
   function textWmCanvas() {
@@ -46,7 +56,7 @@
     return textWm.cv;
   }
   const curWmImg = () => (!S.wm.on ? null : S.wm.src === 'text' ? textWmCanvas() : ((S.wm.id && wmImgs[S.wm.id]) || null));
-  const colorOf = k => COLORS[k] || '#fff';
+  const colorOf = k => COLORS[String(k).split('#')[0]] || '#fff';
 
   // 目前預覽中可見的裁切框
   function frames() {
@@ -112,8 +122,11 @@
   function changed() { save(); syncDependent(); draw(); scheduleEstimate(); updateList(); }
 
   function renderRatioList() {
-    $('#ratioList').innerHTML = RATIOS.map(r =>
-      `<label><input type="checkbox" value="${r.key}" ${S.specs.includes(r.key) ? 'checked' : ''}><span class="sw" style="background:${colorOf(r.key)}"></span> ${r.label} <small>${r.note}</small></label>`).join('');
+    $('#ratioList').innerHTML = RATIOS.map(r => {
+      const on = S.specs.includes(r.key), n = countOf(S, r.key);
+      const cnt = on && r.key !== 'orig' ? `<span class="cnt" title="在同一張圖切出幾個此比例的框"><button type="button" data-cdec="${r.key}" ${n <= 1 ? 'disabled' : ''}>−</button><b>${n}</b><button type="button" data-cinc="${r.key}" ${n >= 10 ? 'disabled' : ''}>＋</button></span>` : '';
+      return `<div class="rrow"><label><input type="checkbox" value="${r.key}" ${on ? 'checked' : ''}><span class="sw" style="background:${colorOf(r.key)}"></span> ${r.label} <small>${r.note}</small></label>${cnt}</div>`;
+    }).join('');
     $$('#ratioList input').forEach(cb => cb.addEventListener('change', () => {
       S.specs = RATIOS.map(r => r.key).filter(k => $$('#ratioList input:checked').some(i => i.value === k));
       changed();
@@ -418,6 +431,17 @@
       ctx.fillStyle = f.color; ctx.fillRect(cx, cy, tw, 18);
       ctx.fillStyle = '#000'; ctx.fillText(label, cx + 5, cy + 3);
     }
+    if (cropGuides.length) {
+      ctx.save(); ctx.strokeStyle = '#ff3b81'; ctx.lineWidth = 1;
+      for (const g of cropGuides) {
+        ctx.beginPath();
+        if (g.x !== undefined) { ctx.moveTo(G.ox + g.x * s, G.oy); ctx.lineTo(G.ox + g.x * s, G.oy + ih); }
+        else if (g.y !== undefined) { ctx.moveTo(G.ox, G.oy + g.y * s); ctx.lineTo(G.ox + iw, G.oy + g.y * s); }
+        else if (g.dot) { ctx.arc(G.ox + g.dot[0] * s, G.oy + g.dot[1] * s, 7, 0, 7); }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
     updateWmXY();
   }
 
@@ -488,6 +512,14 @@
     const fx = bmp.width - w, fy = bmp.height - h;
     it.pos = { ...(it.pos || {}), [key]: { x: fx > 0 ? clamp(x / fx, 0, 1) : 0.5, y: fy > 0 ? clamp(y / fy, 0, 1) : 0.5, z: clamp(w / m.w, 0.05, 1) } };
   }
+  // ----- 磁吸：圖片邊緣／中線、其他裁切框的邊線與中線（含角落）-----
+  let cropGuides = [];
+  const nearestCand = (v, cands, thr) => { let best = null, bd = thr; for (const c of cands) { const d = Math.abs(c - v); if (d <= bd) { bd = d; best = c; } } return best; };
+  function snapLines(others) {
+    const xs = [0, bmp.width / 2, bmp.width], ys = [0, bmp.height / 2, bmp.height];
+    for (const o of others) { xs.push(o.x, o.x + o.w / 2, o.x + o.w); ys.push(o.y, o.y + o.h / 2, o.y + o.h); }
+    return { xs, ys };
+  }
   function hitTest(pt) {
     const fr = frames().slice().reverse(), wi = curWmImg(), hr = 10 / G.s;
     // 四角縮放把手
@@ -508,7 +540,7 @@
     if (!bmp) return;
     const pt = toImg(e), h = hitTest(pt);
     if (!h) return;
-    drag = { ...h, sx: pt.x, sy: pt.y, pos: { ...posOf(curItem(), h.f.key) } };
+    drag = { ...h, sx: pt.x, sy: pt.y, pos: { ...posOf(curItem(), h.f.key) }, others: frames().filter(f => f.key !== h.f.key && f.spec.ratio !== undefined).map(f => f.c) };
     cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing';
   });
   cv.addEventListener('pointermove', e => {
@@ -523,7 +555,17 @@
     if (drag.type === 'resize') {
       const ratio = drag.f.spec.ratio, m = maxRect(ratio), { ax, ay, dx, dy } = drag;
       const limit = Math.min(dx > 0 ? bmp.width - ax : ax, (dy > 0 ? bmp.height - ay : ay) * ratio, m.w);
-      const nw = clamp(Math.max(Math.abs(pt.x - ax), Math.abs(pt.y - ay) * ratio), m.w * 0.05, limit);
+      let nw = Math.max(Math.abs(pt.x - ax), Math.abs(pt.y - ay) * ratio);
+      cropGuides = [];
+      if (!e.altKey) {
+        const sn = snapLines(drag.others), thr = 8 / G.s, nh0 = nw / ratio;
+        const tx = nearestCand(ax + dx * nw, sn.xs, thr), ty = nearestCand(ay + dy * nh0, sn.ys, thr);
+        let cand = null;
+        if (tx !== null) { const w1 = Math.abs(tx - ax); if (w1 > 4) cand = { w: w1, g: { x: tx } }; }
+        if (ty !== null) { const w2 = Math.abs(ty - ay) * ratio; if (w2 > 4 && (!cand || Math.abs(w2 - nw) < Math.abs(cand.w - nw))) cand = { w: w2, g: { y: ty } }; }
+        if (cand) { nw = cand.w; cropGuides.push(cand.g); }
+      }
+      nw = clamp(nw, m.w * 0.05, limit);
       const nh = nw / ratio;
       storeRect(drag.f.key, dx > 0 ? ax : ax - nw, dy > 0 ? ay : ay - nh, Math.round(nw), Math.round(nh));
       draw();
@@ -531,14 +573,23 @@
       setWm({ custom: true, x: clamp((pt.x - c.x - drag.ox) / c.w, 0, 1), y: clamp((pt.y - c.y - drag.oy) / c.h, 0, 1) });
       draw();
     } else {
-      const fx = bmp.width - c.w, fy = bmp.height - c.h, np = { ...drag.pos };
-      if (fx > 0) np.x = clamp((c.x + pt.x - drag.sx) / fx, 0, 1);
-      if (fy > 0) np.y = clamp((c.y + pt.y - drag.sy) / fy, 0, 1);
-      const it = curItem(); it.pos = { ...(it.pos || {}), [drag.f.key]: np };
+      const fx = Math.max(0, bmp.width - c.w), fy = Math.max(0, bmp.height - c.h);
+      let x = clamp(c.x + pt.x - drag.sx, 0, fx), y = clamp(c.y + pt.y - drag.sy, 0, fy);
+      cropGuides = [];
+      if (!e.altKey) {
+        const sn = snapLines(drag.others), thr = 8 / G.s;
+        let bx = null, gx = null, bdx = Infinity, by = null, gy = null, bdy = Infinity;
+        for (const off of [0, c.w / 2, c.w]) { const t = nearestCand(x + off, sn.xs, thr); if (t !== null && Math.abs(t - (x + off)) < bdx) { bdx = Math.abs(t - (x + off)); bx = t - off; gx = t; } }
+        for (const off of [0, c.h / 2, c.h]) { const t = nearestCand(y + off, sn.ys, thr); if (t !== null && Math.abs(t - (y + off)) < bdy) { bdy = Math.abs(t - (y + off)); by = t - off; gy = t; } }
+        if (bx !== null) { x = clamp(bx, 0, fx); cropGuides.push({ x: gx }); }
+        if (by !== null) { y = clamp(by, 0, fy); cropGuides.push({ y: gy }); }
+        if (bx !== null && by !== null) cropGuides.push({ dot: [gx, gy] });
+      }
+      storeRect(drag.f.key, x, y, c.w, c.h);
       draw();
     }
   });
-  const endDrag = () => { if (!drag) return; const t = drag.type; drag = null; cv.style.cursor = ''; save(); if (t !== 'wm') updateList(); syncDependent(); scheduleEstimate(); };
+  const endDrag = () => { if (!drag) return; const t = drag.type; drag = null; cropGuides = []; cv.style.cursor = ''; save(); if (t !== 'wm') updateList(); syncDependent(); scheduleEstimate(); draw(); };
   // 滾輪：在裁切框上縮放（以框中心為準）
   cv.addEventListener('wheel', e => {
     if (!bmp) return;
@@ -885,6 +936,12 @@
       const t = scopeTargets();
       (t || items).forEach(it => { delete it.wm; });
       changed();
+    });
+    $('#ratioList').addEventListener('click', e => {
+      const b = e.target.closest('[data-cdec],[data-cinc]'); if (!b) return;
+      const key = b.dataset.cdec || b.dataset.cinc;
+      S.counts = S.counts || {}; S.counts[key] = clamp(countOf(S, key) + (b.dataset.cinc ? 1 : -1), 1, 10);
+      renderRatioList(); changed();
     });
     $('#wmX').addEventListener('input', wmXYInput);
     $('#wmY').addEventListener('input', wmXYInput);

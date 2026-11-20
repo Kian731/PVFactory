@@ -159,3 +159,9 @@ body.resizing{user-select:none;cursor:col-resize}
 .tpl.on{border-color:var(--accent);color:var(--text)}
 .item .cno{flex:none;width:18px;height:18px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center}
 .item.dragover{outline:2px dashed var(--accent)}
+
+.rrow{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.rrow label{flex:1;min-width:0}
+.cnt{display:inline-flex;align-items:center;gap:4px;flex:none}
+.cnt button{width:22px;height:22px;padding:0;line-height:1}
+.cnt b{min-width:16px;text-align:center}
